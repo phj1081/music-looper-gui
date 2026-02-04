@@ -4,6 +4,16 @@ This module provides an advanced loop detection algorithm that uses:
 1. Audio Spectrogram Transformer (AST) - extracts semantic audio embeddings
 2. Similarity Matrix - finds repeating patterns via cosine similarity
 3. Zero-crossing refinement - precise sample-level alignment
+
+AST Model:
+    MIT/ast-finetuned-audioset-10-10-0.4593
+    https://huggingface.co/MIT/ast-finetuned-audioset-10-10-0.4593
+
+    Paper: "AST: Audio Spectrogram Transformer"
+    Authors: Yuan Gong, Yu-An Chung, James Glass (MIT)
+    https://arxiv.org/abs/2104.01778
+
+    License: BSD-3-Clause
 """
 
 import numpy as np
