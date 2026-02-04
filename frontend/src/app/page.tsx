@@ -12,10 +12,10 @@ import {
   selectFile,
   analyzeFile,
   getAudioBase64,
-  exportLoop,
   type LoopPoint,
   type AnalyzeResponse,
 } from "@/lib/api";
+import { ExportMenu } from "@/components/export-menu";
 
 type Status = "idle" | "selecting" | "analyzing" | "ready" | "error";
 
@@ -64,7 +64,7 @@ export default function Home() {
 
   const handleAnalyzeFile = useCallback(async (filePath: string, name: string) => {
     setStatus("analyzing");
-    setStatusMessage("루프 분석 중...");
+    setStatusMessage("AST로 분석 중...");
     setFilename(name);
 
     try {
@@ -113,10 +113,21 @@ export default function Home() {
     }
   }, [handleAnalyzeFile]);
 
-  const handleLoopSelect = useCallback((loop: LoopPoint) => {
+  const handleLoopSelect = useCallback(async (loop: LoopPoint) => {
     setIsPlaying(false);
     setSelectedLoop(loop);
-  }, []);
+
+    // Auto-play from 3 seconds before loop end to hear the transition
+    if (wavesurferRef.current && analysisResult) {
+      const loopStartTime = loop.start_sample / analysisResult.sample_rate;
+      const loopEndTime = loop.end_sample / analysisResult.sample_rate;
+      const previewStart = Math.max(loopStartTime, loopEndTime - 3);
+      wavesurferRef.current.setTime(previewStart);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      wavesurferRef.current.play();
+      setIsPlaying(true);
+    }
+  }, [analysisResult]);
 
   const handlePlayPause = useCallback(async () => {
     if (!wavesurferRef.current || !selectedLoop || !analysisResult) return;
@@ -126,7 +137,11 @@ export default function Home() {
       setIsPlaying(false);
     } else {
       const startTime = selectedLoop.start_sample / analysisResult.sample_rate;
-      wavesurferRef.current.setTime(startTime);
+      const endTime = selectedLoop.end_sample / analysisResult.sample_rate;
+      const previewSeconds = 3;
+      const previewTime = Math.max(startTime, endTime - previewSeconds);
+
+      wavesurferRef.current.setTime(previewTime);
       // 50ms 대기 (시킹 완료 및 버퍼 준비)
       await new Promise(resolve => setTimeout(resolve, 50));
       wavesurferRef.current.play();
@@ -156,22 +171,9 @@ export default function Home() {
     }
   }, [selectedLoop, analysisResult]);
 
-  const handleExport = useCallback(async () => {
-    if (!selectedLoop) return;
-
-    try {
-      setStatusMessage("내보내는 중...");
-      const success = await exportLoop(selectedLoop.start_sample, selectedLoop.end_sample);
-
-      if (success) {
-        setStatusMessage("내보내기 완료");
-      } else {
-        setStatusMessage("내보내기 취소됨");
-      }
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : "내보내기 실패");
-    }
-  }, [selectedLoop]);
+  const handleStatusChange = useCallback((message: string) => {
+    setStatusMessage(message);
+  }, []);
 
   const handleReset = useCallback(() => {
     setStatus("idle");
@@ -261,7 +263,12 @@ export default function Home() {
                   disabled={!selectedLoop}
                   onPlayPause={handlePlayPause}
                   onToggleLoop={() => setIsLooping(!isLooping)}
-                  onExport={handleExport}
+                />
+                <ExportMenu
+                  loopStart={selectedLoop?.start_sample ?? 0}
+                  loopEnd={selectedLoop?.end_sample ?? 0}
+                  disabled={!selectedLoop}
+                  onStatusChange={handleStatusChange}
                 />
               </div>
             </>
@@ -269,7 +276,7 @@ export default function Home() {
         </main>
 
         <footer className="mt-12 text-center text-sm text-muted-foreground">
-          <p>Powered by PyMusicLooper</p>
+          <p>Powered by Audio Spectrogram Transformer (AST)</p>
         </footer>
       </div>
     </div>

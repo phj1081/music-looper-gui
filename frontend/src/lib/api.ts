@@ -1,4 +1,7 @@
 // PyWebView API types
+export type ExportFormat = "ogg" | "wav";
+export type InfoFormat = "json" | "txt";
+
 declare global {
   interface Window {
     pywebview?: {
@@ -8,6 +11,10 @@ declare global {
         get_audio_base64: () => Promise<string | null>;
         get_waveform: (points?: number) => Promise<number[] | null>;
         export_loop: (loopStart: number, loopEnd: number) => Promise<boolean>;
+        export_with_loop_tags: (loopStart: number, loopEnd: number, format: ExportFormat) => Promise<boolean>;
+        export_split_sections: (loopStart: number, loopEnd: number) => Promise<boolean>;
+        export_extended: (loopStart: number, loopEnd: number, loopCount: number) => Promise<boolean>;
+        export_loop_info: (loopStart: number, loopEnd: number, format: InfoFormat) => Promise<boolean>;
       };
     };
   }
@@ -21,6 +28,7 @@ export interface LoopPoint {
   end_time: string;
   duration: string;
   score: number;
+  similarity_score?: number;
 }
 
 interface AnalyzeResult {
@@ -82,4 +90,43 @@ export async function exportLoop(loopStart: number, loopEnd: number): Promise<bo
   const api = getPyWebView();
   if (!api) throw new Error("PyWebView not available");
   return api.export_loop(loopStart, loopEnd);
+}
+
+export async function exportWithLoopTags(
+  loopStart: number,
+  loopEnd: number,
+  format: ExportFormat
+): Promise<boolean> {
+  const api = getPyWebView();
+  if (!api) throw new Error("PyWebView not available");
+  return api.export_with_loop_tags(loopStart, loopEnd, format);
+}
+
+export async function exportSplitSections(
+  loopStart: number,
+  loopEnd: number
+): Promise<boolean> {
+  const api = getPyWebView();
+  if (!api) throw new Error("PyWebView not available");
+  return api.export_split_sections(loopStart, loopEnd);
+}
+
+export async function exportExtended(
+  loopStart: number,
+  loopEnd: number,
+  loopCount: number
+): Promise<boolean> {
+  const api = getPyWebView();
+  if (!api) throw new Error("PyWebView not available");
+  return api.export_extended(loopStart, loopEnd, loopCount);
+}
+
+export async function exportLoopInfo(
+  loopStart: number,
+  loopEnd: number,
+  format: InfoFormat
+): Promise<boolean> {
+  const api = getPyWebView();
+  if (!api) throw new Error("PyWebView not available");
+  return api.export_loop_info(loopStart, loopEnd, format);
 }
