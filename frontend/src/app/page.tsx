@@ -64,7 +64,7 @@ export default function Home() {
 
   const handleAnalyzeFile = useCallback(async (filePath: string, name: string) => {
     setStatus("analyzing");
-    setStatusMessage("AST로 분석 중...");
+    setStatusMessage("분석 중...");
     setFilename(name);
 
     try {
@@ -276,7 +276,14 @@ export default function Home() {
         </main>
 
         <footer className="mt-12 text-center text-sm text-muted-foreground">
-          <p>Powered by Audio Spectrogram Transformer (AST)</p>
+          <a
+            href="https://github.com/phj1081/music-looper-gui"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-foreground transition-colors"
+          >
+            Made by phj1081
+          </a>
         </footer>
       </div>
     </div>
