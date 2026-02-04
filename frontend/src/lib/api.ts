@@ -4,13 +4,22 @@ declare global {
     pywebview?: {
       api: {
         select_file: () => Promise<{ filename: string; path: string } | null>;
-        analyze: (filePath: string) => Promise<AnalyzeResult>;
+        analyze: (filePath: string, method?: string) => Promise<AnalyzeResult>;
         get_audio_base64: () => Promise<string | null>;
         get_waveform: (points?: number) => Promise<number[] | null>;
         export_loop: (loopStart: number, loopEnd: number) => Promise<boolean>;
+        get_available_methods: () => Promise<AnalysisMethod[]>;
       };
     };
   }
+}
+
+export type AnalysisMethodId = "pymusiclooper" | "ssm";
+
+export interface AnalysisMethod {
+  id: AnalysisMethodId;
+  name: string;
+  description: string;
 }
 
 export interface LoopPoint {
@@ -21,6 +30,9 @@ export interface LoopPoint {
   end_time: string;
   duration: string;
   score: number;
+  method?: string;
+  ssm_score?: number;
+  correlation_score?: number;
 }
 
 interface AnalyzeResult {
@@ -29,12 +41,14 @@ interface AnalyzeResult {
   duration?: number;
   sample_rate?: number;
   loops?: LoopPoint[];
+  method?: string;
 }
 
 export interface AnalyzeResponse {
   duration: number;
   sample_rate: number;
   loops: LoopPoint[];
+  method: string;
 }
 
 function getPyWebView() {
@@ -47,11 +61,14 @@ export async function selectFile(): Promise<{ filename: string; path: string } |
   return api.select_file();
 }
 
-export async function analyzeFile(filePath: string): Promise<AnalyzeResponse> {
+export async function analyzeFile(
+  filePath: string,
+  method: AnalysisMethodId = "pymusiclooper"
+): Promise<AnalyzeResponse> {
   const api = getPyWebView();
   if (!api) throw new Error("PyWebView not available");
 
-  const result = await api.analyze(filePath);
+  const result = await api.analyze(filePath, method);
 
   if (!result.success) {
     throw new Error(result.error || "Analysis failed");
@@ -61,7 +78,14 @@ export async function analyzeFile(filePath: string): Promise<AnalyzeResponse> {
     duration: result.duration!,
     sample_rate: result.sample_rate!,
     loops: result.loops!,
+    method: result.method || method,
   };
+}
+
+export async function getAvailableMethods(): Promise<AnalysisMethod[]> {
+  const api = getPyWebView();
+  if (!api) throw new Error("PyWebView not available");
+  return api.get_available_methods();
 }
 
 export async function getAudioBase64(): Promise<string | null> {

@@ -13,8 +13,11 @@ import {
   analyzeFile,
   getAudioBase64,
   exportLoop,
+  getAvailableMethods,
   type LoopPoint,
   type AnalyzeResponse,
+  type AnalysisMethod,
+  type AnalysisMethodId,
 } from "@/lib/api";
 
 type Status = "idle" | "selecting" | "analyzing" | "ready" | "error";
@@ -36,14 +39,28 @@ export default function Home() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLooping, setIsLooping] = useState(true);
   const [isReady, setIsReady] = useState(false);
+  const [methods, setMethods] = useState<AnalysisMethod[]>([]);
+  const [selectedMethod, setSelectedMethod] = useState<AnalysisMethodId>("pymusiclooper");
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const analyzeFileRef = useRef<((path: string, name: string) => void) | null>(null);
+  const currentFileRef = useRef<{ path: string; name: string } | null>(null);
 
   // Wait for PyWebView to be ready and setup drop handler
   useEffect(() => {
-    const checkPyWebView = () => {
+    const checkPyWebView = async () => {
       if (window.pywebview) {
         setIsReady(true);
+        // Load available methods
+        try {
+          const availableMethods = await getAvailableMethods();
+          setMethods(availableMethods);
+        } catch {
+          // Fallback if method not available
+          setMethods([
+            { id: "pymusiclooper", name: "PyMusicLooper", description: "Original algorithm" },
+            { id: "ssm", name: "SSM", description: "Self-Similarity Matrix" },
+          ]);
+        }
       } else {
         setTimeout(checkPyWebView, 100);
       }
@@ -62,13 +79,16 @@ export default function Home() {
     };
   }, []);
 
-  const handleAnalyzeFile = useCallback(async (filePath: string, name: string) => {
+  const handleAnalyzeFile = useCallback(async (filePath: string, name: string, method?: AnalysisMethodId) => {
     setStatus("analyzing");
-    setStatusMessage("루프 분석 중...");
+    const methodToUse = method || selectedMethod;
+    const methodName = methods.find(m => m.id === methodToUse)?.name || methodToUse;
+    setStatusMessage(`${methodName}으로 분석 중...`);
     setFilename(name);
+    currentFileRef.current = { path: filePath, name };
 
     try {
-      const analysis = await analyzeFile(filePath);
+      const analysis = await analyzeFile(filePath, methodToUse);
       setAnalysisResult(analysis);
 
       const base64 = await getAudioBase64();
@@ -78,7 +98,7 @@ export default function Home() {
 
       if (analysis.loops.length > 0) {
         setSelectedLoop(analysis.loops[0]);
-        setStatusMessage(`${analysis.loops.length}개의 루프 포인트 발견`);
+        setStatusMessage(`${analysis.loops.length}개의 루프 포인트 발견 (${methodName})`);
       } else {
         setStatusMessage("루프 포인트를 찾을 수 없습니다");
       }
@@ -87,7 +107,7 @@ export default function Home() {
       setStatus("error");
       setStatusMessage(error instanceof Error ? error.message : "오류가 발생했습니다");
     }
-  }, []);
+  }, [selectedMethod, methods]);
 
   // Keep ref updated for drop handler
   useEffect(() => {
@@ -181,7 +201,17 @@ export default function Home() {
     setAnalysisResult(null);
     setSelectedLoop(null);
     setIsPlaying(false);
+    currentFileRef.current = null;
   }, []);
+
+  const handleMethodChange = useCallback(async (newMethod: AnalysisMethodId) => {
+    setSelectedMethod(newMethod);
+    // Re-analyze with new method if file is already loaded
+    if (currentFileRef.current) {
+      setIsPlaying(false);
+      await handleAnalyzeFile(currentFileRef.current.path, currentFileRef.current.name, newMethod);
+    }
+  }, [handleAnalyzeFile]);
 
   if (!isReady) {
     return (
@@ -205,6 +235,30 @@ export default function Home() {
         </header>
 
         <main className="space-y-6">
+          {/* Method Selector */}
+          {methods.length > 0 && (
+            <div className="flex items-center justify-center gap-2">
+              <span className="text-sm text-muted-foreground">분석 방식:</span>
+              <div className="flex gap-1 bg-muted p-1 rounded-lg">
+                {methods.map((method) => (
+                  <button
+                    key={method.id}
+                    onClick={() => handleMethodChange(method.id)}
+                    disabled={status === "analyzing"}
+                    className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                      selectedMethod === method.id
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    } disabled:opacity-50`}
+                    title={method.description}
+                  >
+                    {method.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {status === "idle" && (
             <Card
               className="border-2 border-dashed p-8 text-center cursor-pointer transition-colors border-muted-foreground/25 hover:border-primary/50"
@@ -269,7 +323,11 @@ export default function Home() {
         </main>
 
         <footer className="mt-12 text-center text-sm text-muted-foreground">
-          <p>Powered by PyMusicLooper</p>
+          <p>
+            {analysisResult?.method === "ssm"
+              ? "Powered by SSM (Self-Similarity Matrix)"
+              : "Powered by PyMusicLooper"}
+          </p>
         </footer>
       </div>
     </div>
