@@ -1,0 +1,17 @@
+[project]
+name = "music-looper"
+version = "0.1.0"
+description = "Music Looper Desktop App - Find perfect loop points in audio files"
+requires-python = ">=3.10"
+dependencies = [
+    "pymusiclooper>=3.0.0",
+    "pywebview>=5.0.0",
+    "numpy",
+]
+
+[project.scripts]
+music-looper = "app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
