@@ -12,13 +12,10 @@ import {
   selectFile,
   analyzeFile,
   getAudioBase64,
-  exportLoop,
-  getAvailableMethods,
   type LoopPoint,
   type AnalyzeResponse,
-  type AnalysisMethod,
-  type AnalysisMethodId,
 } from "@/lib/api";
+import { ExportMenu } from "@/components/export-menu";
 
 type Status = "idle" | "selecting" | "analyzing" | "ready" | "error";
 
@@ -39,28 +36,14 @@ export default function Home() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLooping, setIsLooping] = useState(true);
   const [isReady, setIsReady] = useState(false);
-  const [methods, setMethods] = useState<AnalysisMethod[]>([]);
-  const [selectedMethod, setSelectedMethod] = useState<AnalysisMethodId>("pymusiclooper");
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const analyzeFileRef = useRef<((path: string, name: string) => void) | null>(null);
-  const currentFileRef = useRef<{ path: string; name: string } | null>(null);
 
   // Wait for PyWebView to be ready and setup drop handler
   useEffect(() => {
-    const checkPyWebView = async () => {
+    const checkPyWebView = () => {
       if (window.pywebview) {
         setIsReady(true);
-        // Load available methods
-        try {
-          const availableMethods = await getAvailableMethods();
-          setMethods(availableMethods);
-        } catch {
-          // Fallback if method not available
-          setMethods([
-            { id: "pymusiclooper", name: "PyMusicLooper", description: "Original algorithm" },
-            { id: "ssm", name: "SSM", description: "Self-Similarity Matrix" },
-          ]);
-        }
       } else {
         setTimeout(checkPyWebView, 100);
       }
@@ -79,16 +62,13 @@ export default function Home() {
     };
   }, []);
 
-  const handleAnalyzeFile = useCallback(async (filePath: string, name: string, method?: AnalysisMethodId) => {
+  const handleAnalyzeFile = useCallback(async (filePath: string, name: string) => {
     setStatus("analyzing");
-    const methodToUse = method || selectedMethod;
-    const methodName = methods.find(m => m.id === methodToUse)?.name || methodToUse;
-    setStatusMessage(`${methodName}으로 분석 중...`);
+    setStatusMessage("AST로 분석 중...");
     setFilename(name);
-    currentFileRef.current = { path: filePath, name };
 
     try {
-      const analysis = await analyzeFile(filePath, methodToUse);
+      const analysis = await analyzeFile(filePath);
       setAnalysisResult(analysis);
 
       const base64 = await getAudioBase64();
@@ -98,7 +78,7 @@ export default function Home() {
 
       if (analysis.loops.length > 0) {
         setSelectedLoop(analysis.loops[0]);
-        setStatusMessage(`${analysis.loops.length}개의 루프 포인트 발견 (${methodName})`);
+        setStatusMessage(`${analysis.loops.length}개의 루프 포인트 발견`);
       } else {
         setStatusMessage("루프 포인트를 찾을 수 없습니다");
       }
@@ -107,7 +87,7 @@ export default function Home() {
       setStatus("error");
       setStatusMessage(error instanceof Error ? error.message : "오류가 발생했습니다");
     }
-  }, [selectedMethod, methods]);
+  }, []);
 
   // Keep ref updated for drop handler
   useEffect(() => {
@@ -133,10 +113,21 @@ export default function Home() {
     }
   }, [handleAnalyzeFile]);
 
-  const handleLoopSelect = useCallback((loop: LoopPoint) => {
+  const handleLoopSelect = useCallback(async (loop: LoopPoint) => {
     setIsPlaying(false);
     setSelectedLoop(loop);
-  }, []);
+
+    // Auto-play from 3 seconds before loop end to hear the transition
+    if (wavesurferRef.current && analysisResult) {
+      const loopStartTime = loop.start_sample / analysisResult.sample_rate;
+      const loopEndTime = loop.end_sample / analysisResult.sample_rate;
+      const previewStart = Math.max(loopStartTime, loopEndTime - 3);
+      wavesurferRef.current.setTime(previewStart);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      wavesurferRef.current.play();
+      setIsPlaying(true);
+    }
+  }, [analysisResult]);
 
   const handlePlayPause = useCallback(async () => {
     if (!wavesurferRef.current || !selectedLoop || !analysisResult) return;
@@ -146,7 +137,11 @@ export default function Home() {
       setIsPlaying(false);
     } else {
       const startTime = selectedLoop.start_sample / analysisResult.sample_rate;
-      wavesurferRef.current.setTime(startTime);
+      const endTime = selectedLoop.end_sample / analysisResult.sample_rate;
+      const previewSeconds = 3;
+      const previewTime = Math.max(startTime, endTime - previewSeconds);
+
+      wavesurferRef.current.setTime(previewTime);
       // 50ms 대기 (시킹 완료 및 버퍼 준비)
       await new Promise(resolve => setTimeout(resolve, 50));
       wavesurferRef.current.play();
@@ -176,22 +171,9 @@ export default function Home() {
     }
   }, [selectedLoop, analysisResult]);
 
-  const handleExport = useCallback(async () => {
-    if (!selectedLoop) return;
-
-    try {
-      setStatusMessage("내보내는 중...");
-      const success = await exportLoop(selectedLoop.start_sample, selectedLoop.end_sample);
-
-      if (success) {
-        setStatusMessage("내보내기 완료");
-      } else {
-        setStatusMessage("내보내기 취소됨");
-      }
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : "내보내기 실패");
-    }
-  }, [selectedLoop]);
+  const handleStatusChange = useCallback((message: string) => {
+    setStatusMessage(message);
+  }, []);
 
   const handleReset = useCallback(() => {
     setStatus("idle");
@@ -201,17 +183,7 @@ export default function Home() {
     setAnalysisResult(null);
     setSelectedLoop(null);
     setIsPlaying(false);
-    currentFileRef.current = null;
   }, []);
-
-  const handleMethodChange = useCallback(async (newMethod: AnalysisMethodId) => {
-    setSelectedMethod(newMethod);
-    // Re-analyze with new method if file is already loaded
-    if (currentFileRef.current) {
-      setIsPlaying(false);
-      await handleAnalyzeFile(currentFileRef.current.path, currentFileRef.current.name, newMethod);
-    }
-  }, [handleAnalyzeFile]);
 
   if (!isReady) {
     return (
@@ -235,30 +207,6 @@ export default function Home() {
         </header>
 
         <main className="space-y-6">
-          {/* Method Selector */}
-          {methods.length > 0 && (
-            <div className="flex items-center justify-center gap-2">
-              <span className="text-sm text-muted-foreground">분석 방식:</span>
-              <div className="flex gap-1 bg-muted p-1 rounded-lg">
-                {methods.map((method) => (
-                  <button
-                    key={method.id}
-                    onClick={() => handleMethodChange(method.id)}
-                    disabled={status === "analyzing"}
-                    className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                      selectedMethod === method.id
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
-                    } disabled:opacity-50`}
-                    title={method.description}
-                  >
-                    {method.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
           {status === "idle" && (
             <Card
               className="border-2 border-dashed p-8 text-center cursor-pointer transition-colors border-muted-foreground/25 hover:border-primary/50"
@@ -315,7 +263,12 @@ export default function Home() {
                   disabled={!selectedLoop}
                   onPlayPause={handlePlayPause}
                   onToggleLoop={() => setIsLooping(!isLooping)}
-                  onExport={handleExport}
+                />
+                <ExportMenu
+                  loopStart={selectedLoop?.start_sample ?? 0}
+                  loopEnd={selectedLoop?.end_sample ?? 0}
+                  disabled={!selectedLoop}
+                  onStatusChange={handleStatusChange}
                 />
               </div>
             </>
@@ -323,11 +276,7 @@ export default function Home() {
         </main>
 
         <footer className="mt-12 text-center text-sm text-muted-foreground">
-          <p>
-            {analysisResult?.method === "ssm"
-              ? "Powered by SSM (Self-Similarity Matrix)"
-              : "Powered by PyMusicLooper"}
-          </p>
+          <p>Powered by Audio Spectrogram Transformer (AST)</p>
         </footer>
       </div>
     </div>

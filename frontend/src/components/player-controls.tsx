@@ -1,6 +1,6 @@
 "use client";
 
-import { Play, Pause, Download, Repeat } from "lucide-react";
+import { Play, Pause, Repeat } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface PlayerControlsProps {
@@ -9,7 +9,6 @@ interface PlayerControlsProps {
   disabled: boolean;
   onPlayPause: () => void;
   onToggleLoop: () => void;
-  onExport: () => void;
 }
 
 export function PlayerControls({
@@ -18,7 +17,6 @@ export function PlayerControls({
   disabled,
   onPlayPause,
   onToggleLoop,
-  onExport,
 }: PlayerControlsProps) {
   return (
     <div className="flex items-center gap-2">
@@ -49,11 +47,6 @@ export function PlayerControls({
         title="루프 반복"
       >
         <Repeat className={`h-5 w-5 ${isLooping ? "" : "opacity-50"}`} />
-      </Button>
-
-      <Button variant="outline" size="lg" onClick={onExport} disabled={disabled}>
-        <Download className="mr-2 h-5 w-5" />
-        내보내기
       </Button>
     </div>
   );

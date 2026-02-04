@@ -1,25 +1,23 @@
 // PyWebView API types
+export type ExportFormat = "ogg" | "wav";
+export type InfoFormat = "json" | "txt";
+
 declare global {
   interface Window {
     pywebview?: {
       api: {
         select_file: () => Promise<{ filename: string; path: string } | null>;
-        analyze: (filePath: string, method?: string) => Promise<AnalyzeResult>;
+        analyze: (filePath: string) => Promise<AnalyzeResult>;
         get_audio_base64: () => Promise<string | null>;
         get_waveform: (points?: number) => Promise<number[] | null>;
         export_loop: (loopStart: number, loopEnd: number) => Promise<boolean>;
-        get_available_methods: () => Promise<AnalysisMethod[]>;
+        export_with_loop_tags: (loopStart: number, loopEnd: number, format: ExportFormat) => Promise<boolean>;
+        export_split_sections: (loopStart: number, loopEnd: number) => Promise<boolean>;
+        export_extended: (loopStart: number, loopEnd: number, loopCount: number) => Promise<boolean>;
+        export_loop_info: (loopStart: number, loopEnd: number, format: InfoFormat) => Promise<boolean>;
       };
     };
   }
-}
-
-export type AnalysisMethodId = "pymusiclooper" | "ssm";
-
-export interface AnalysisMethod {
-  id: AnalysisMethodId;
-  name: string;
-  description: string;
 }
 
 export interface LoopPoint {
@@ -30,9 +28,7 @@ export interface LoopPoint {
   end_time: string;
   duration: string;
   score: number;
-  method?: string;
-  ssm_score?: number;
-  correlation_score?: number;
+  similarity_score?: number;
 }
 
 interface AnalyzeResult {
@@ -41,14 +37,12 @@ interface AnalyzeResult {
   duration?: number;
   sample_rate?: number;
   loops?: LoopPoint[];
-  method?: string;
 }
 
 export interface AnalyzeResponse {
   duration: number;
   sample_rate: number;
   loops: LoopPoint[];
-  method: string;
 }
 
 function getPyWebView() {
@@ -61,14 +55,11 @@ export async function selectFile(): Promise<{ filename: string; path: string } |
   return api.select_file();
 }
 
-export async function analyzeFile(
-  filePath: string,
-  method: AnalysisMethodId = "pymusiclooper"
-): Promise<AnalyzeResponse> {
+export async function analyzeFile(filePath: string): Promise<AnalyzeResponse> {
   const api = getPyWebView();
   if (!api) throw new Error("PyWebView not available");
 
-  const result = await api.analyze(filePath, method);
+  const result = await api.analyze(filePath);
 
   if (!result.success) {
     throw new Error(result.error || "Analysis failed");
@@ -78,14 +69,7 @@ export async function analyzeFile(
     duration: result.duration!,
     sample_rate: result.sample_rate!,
     loops: result.loops!,
-    method: result.method || method,
   };
-}
-
-export async function getAvailableMethods(): Promise<AnalysisMethod[]> {
-  const api = getPyWebView();
-  if (!api) throw new Error("PyWebView not available");
-  return api.get_available_methods();
 }
 
 export async function getAudioBase64(): Promise<string | null> {
@@ -106,4 +90,43 @@ export async function exportLoop(loopStart: number, loopEnd: number): Promise<bo
   const api = getPyWebView();
   if (!api) throw new Error("PyWebView not available");
   return api.export_loop(loopStart, loopEnd);
+}
+
+export async function exportWithLoopTags(
+  loopStart: number,
+  loopEnd: number,
+  format: ExportFormat
+): Promise<boolean> {
+  const api = getPyWebView();
+  if (!api) throw new Error("PyWebView not available");
+  return api.export_with_loop_tags(loopStart, loopEnd, format);
+}
+
+export async function exportSplitSections(
+  loopStart: number,
+  loopEnd: number
+): Promise<boolean> {
+  const api = getPyWebView();
+  if (!api) throw new Error("PyWebView not available");
+  return api.export_split_sections(loopStart, loopEnd);
+}
+
+export async function exportExtended(
+  loopStart: number,
+  loopEnd: number,
+  loopCount: number
+): Promise<boolean> {
+  const api = getPyWebView();
+  if (!api) throw new Error("PyWebView not available");
+  return api.export_extended(loopStart, loopEnd, loopCount);
+}
+
+export async function exportLoopInfo(
+  loopStart: number,
+  loopEnd: number,
+  format: InfoFormat
+): Promise<boolean> {
+  const api = getPyWebView();
+  if (!api) throw new Error("PyWebView not available");
+  return api.export_loop_info(loopStart, loopEnd, format);
 }
