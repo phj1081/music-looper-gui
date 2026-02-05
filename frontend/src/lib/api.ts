@@ -2,12 +2,42 @@
 export type ExportFormat = "ogg" | "wav";
 export type InfoFormat = "json" | "txt";
 
+export interface ProgressResponse {
+  current: number;
+  total: number;
+  stage: string;
+  error?: string;
+}
+
+export interface EnhancementStatus {
+  enabled: boolean;
+  effective: boolean;
+}
+
+export interface EnhancementsInfo {
+  beat_alignment: EnhancementStatus;
+  structure: EnhancementStatus;
+  seam_refinement?: string;
+}
+
+interface AnalyzeResult {
+  success: boolean;
+  error?: string;
+  duration?: number;
+  sample_rate?: number;
+  enhancements?: EnhancementsInfo;
+  loops?: LoopPoint[];
+}
+
 declare global {
   interface Window {
     pywebview?: {
       api: {
         select_file: () => Promise<{ filename: string; path: string } | null>;
         analyze: (filePath: string) => Promise<AnalyzeResult>;
+        analyze_async: (filePath: string) => Promise<{ started: boolean }>;
+        get_progress: () => Promise<ProgressResponse>;
+        get_analysis_result: () => Promise<AnalyzeResult | null>;
         get_audio_base64: () => Promise<string | null>;
         get_waveform: (points?: number) => Promise<number[] | null>;
         export_loop: (loopStart: number, loopEnd: number) => Promise<boolean>;
@@ -29,19 +59,17 @@ export interface LoopPoint {
   duration: string;
   score: number;
   similarity_score?: number;
-}
-
-interface AnalyzeResult {
-  success: boolean;
-  error?: string;
-  duration?: number;
-  sample_rate?: number;
-  loops?: LoopPoint[];
+  // allin1 structure analysis fields (auto-populated if allin1 installed)
+  start_segment?: string;       // 'intro', 'verse', 'chorus', 'bridge', 'outro'
+  end_segment?: string;
+  is_downbeat_aligned?: boolean;
+  structure_boost?: number;
 }
 
 export interface AnalyzeResponse {
   duration: number;
   sample_rate: number;
+  enhancements?: EnhancementsInfo;
   loops: LoopPoint[];
 }
 
@@ -68,6 +96,36 @@ export async function analyzeFile(filePath: string): Promise<AnalyzeResponse> {
   return {
     duration: result.duration!,
     sample_rate: result.sample_rate!,
+    enhancements: result.enhancements,
+    loops: result.loops!,
+  };
+}
+
+export async function analyzeFileAsync(filePath: string): Promise<void> {
+  const api = getPyWebView();
+  if (!api) throw new Error("PyWebView not available");
+  await api.analyze_async(filePath);
+}
+
+export async function getProgress(): Promise<ProgressResponse> {
+  const api = getPyWebView();
+  if (!api) throw new Error("PyWebView not available");
+  return api.get_progress();
+}
+
+export async function getAnalysisResult(): Promise<AnalyzeResponse | null> {
+  const api = getPyWebView();
+  if (!api) throw new Error("PyWebView not available");
+
+  const result = await api.get_analysis_result();
+  if (!result || !result.success) {
+    return null;
+  }
+
+  return {
+    duration: result.duration!,
+    sample_rate: result.sample_rate!,
+    enhancements: result.enhancements,
     loops: result.loops!,
   };
 }

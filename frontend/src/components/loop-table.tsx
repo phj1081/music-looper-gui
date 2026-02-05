@@ -9,7 +9,30 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import type { LoopPoint } from "@/lib/api";
+
+// Segment label color mapping
+const segmentColors: Record<string, string> = {
+  chorus: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+  verse: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
+  bridge: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200",
+  intro: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+  outro: "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200",
+  inst: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+};
+
+function SegmentBadge({ label }: { label?: string }) {
+  if (!label) return <span className="text-muted-foreground text-xs">-</span>;
+
+  const colorClass = segmentColors[label] || "bg-muted text-muted-foreground";
+
+  return (
+    <Badge variant="outline" className={`text-xs px-1.5 py-0 ${colorClass}`}>
+      {label}
+    </Badge>
+  );
+}
 
 interface LoopTableProps {
   loops: LoopPoint[];
@@ -28,6 +51,9 @@ export function LoopTable({ loops, selectedIndex, onSelect }: LoopTableProps) {
     );
   }
 
+  // Auto-detect if we should show segments based on data (allin1 available)
+  const hasSegmentData = loops.some(loop => loop.start_segment || loop.end_segment);
+
   return (
     <Card>
       <Table>
@@ -37,11 +63,14 @@ export function LoopTable({ loops, selectedIndex, onSelect }: LoopTableProps) {
             <TableHead className="text-center">시작</TableHead>
             <TableHead className="text-center">끝</TableHead>
             <TableHead className="text-center">길이</TableHead>
+            {hasSegmentData && (
+              <TableHead className="text-center">구간</TableHead>
+            )}
             <TableHead className="text-center">점수</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {loops.map((loop) => (
+          {loops.map((loop, rowIndex) => (
             <TableRow
               key={loop.index}
               className={`cursor-pointer transition-colors ${
@@ -52,7 +81,7 @@ export function LoopTable({ loops, selectedIndex, onSelect }: LoopTableProps) {
               onClick={() => onSelect(loop)}
             >
               <TableCell className="text-center font-medium">
-                {loop.index + 1}
+                <span title={`원래 순위: ${loop.index + 1}`}>{rowIndex + 1}</span>
               </TableCell>
               <TableCell className="text-center font-mono">
                 {loop.start_time}
@@ -63,6 +92,18 @@ export function LoopTable({ loops, selectedIndex, onSelect }: LoopTableProps) {
               <TableCell className="text-center font-mono">
                 {loop.duration}
               </TableCell>
+              {hasSegmentData && (
+                <TableCell className="text-center">
+                  <div className="flex items-center justify-center gap-1">
+                    <SegmentBadge label={loop.start_segment} />
+                    <span className="text-muted-foreground text-xs">&rarr;</span>
+                    <SegmentBadge label={loop.end_segment} />
+                    {loop.is_downbeat_aligned && (
+                      <span className="ml-1 text-primary" title="다운비트 정렬">&#9833;</span>
+                    )}
+                  </div>
+                </TableCell>
+              )}
               <TableCell className="text-center">
                 <span
                   className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${

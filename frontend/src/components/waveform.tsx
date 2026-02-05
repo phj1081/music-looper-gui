@@ -4,16 +4,26 @@ import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin, { Region } from "wavesurfer.js/dist/plugins/regions.js";
 import { Card } from "@/components/ui/card";
+import { LoopingWebAudioPlayer } from "@/lib/looping-webaudio-player";
+
+function formatTimeMs(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00.000";
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${secs.toFixed(3).padStart(6, "0")}`;
+}
 
 interface WaveformProps {
   audioUrl: string | null;
-  loopStart?: number;
-  loopEnd?: number;
-  sampleRate?: number;
+  loopStart?: number | undefined;
+  loopEnd?: number | undefined;
+  sampleRate?: number | undefined;
+  isLooping: boolean;
   isPlaying: boolean;
-  onReady?: () => void;
-  onTimeUpdate?: (time: number) => void;
-  wavesurferRef?: React.RefObject<WaveSurfer | null>;
+  onReady?: (() => void) | undefined;
+  onTimeUpdate?: ((time: number) => void) | undefined;
+  onLoopChange?: ((loopStartSample: number, loopEndSample: number) => void) | undefined;
+  wavesurferRef?: React.RefObject<WaveSurfer | null> | undefined;
 }
 
 export function Waveform({
@@ -21,9 +31,11 @@ export function Waveform({
   loopStart,
   loopEnd,
   sampleRate = 44100,
+  isLooping,
   isPlaying,
   onReady,
   onTimeUpdate,
+  onLoopChange,
   wavesurferRef,
 }: WaveformProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -31,12 +43,34 @@ export function Waveform({
   const regionsRef = useRef<RegionsPlugin | null>(null);
   const loopRegionRef = useRef<Region | null>(null);
   const [isWsReady, setIsWsReady] = useState(false);
+  const currentLoopToken = `${loopStart ?? "x"}:${loopEnd ?? "x"}:${sampleRate}`;
+  const [dragTimes, setDragTimes] = useState<{ start: number; end: number; token: string } | null>(null);
+  const dragTimesRef = useRef<{ start: number; end: number; token: string } | null>(null);
+  const dragRafRef = useRef<number | null>(null);
+  const dragHideTimeoutRef = useRef<number | null>(null);
+  const onReadyRef = useRef(onReady);
+  const onTimeUpdateRef = useRef(onTimeUpdate);
+  const onLoopChangeRef = useRef(onLoopChange);
+
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
+
+  useEffect(() => {
+    onTimeUpdateRef.current = onTimeUpdate;
+  }, [onTimeUpdate]);
+
+  useEffect(() => {
+    onLoopChangeRef.current = onLoopChange;
+  }, [onLoopChange]);
 
   useEffect(() => {
     if (!containerRef.current || !audioUrl) return;
 
     const regions = RegionsPlugin.create();
     regionsRef.current = regions;
+
+    const media = new LoopingWebAudioPlayer();
 
     const ws = WaveSurfer.create({
       container: containerRef.current,
@@ -47,17 +81,28 @@ export function Waveform({
       height: 120,
       normalize: true,
       plugins: [regions],
+      media: media as unknown as HTMLMediaElement,
     });
 
-    ws.load(audioUrl);
+    void ws.load(audioUrl).catch((err) => {
+      // wavesurfer aborts its internal fetch on cleanup/reload (common in dev/HMR).
+      // Treat AbortError as a benign cancellation to avoid Next.js error overlay noise.
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (typeof err === "object" && err && "name" in err && (err as { name?: unknown }).name === "AbortError") return;
+      if (typeof err === "object" && err && "message" in err && typeof (err as { message?: unknown }).message === "string") {
+        const message = (err as { message: string }).message.toLowerCase();
+        if (message.includes("fetch is aborted") || message.includes("aborted")) return;
+      }
+      console.error("WaveSurfer load error:", err);
+    });
 
     ws.on("ready", () => {
       setIsWsReady(true);
-      onReady?.();
+      onReadyRef.current?.();
     });
 
     ws.on("timeupdate", (time) => {
-      onTimeUpdate?.(time);
+      onTimeUpdateRef.current?.(time);
     });
 
     internalWsRef.current = ws;
@@ -67,7 +112,20 @@ export function Waveform({
 
     return () => {
       setIsWsReady(false);
+      setDragTimes(null);
+      dragTimesRef.current = null;
+      if (dragRafRef.current !== null) {
+        cancelAnimationFrame(dragRafRef.current);
+        dragRafRef.current = null;
+      }
+      if (dragHideTimeoutRef.current !== null) {
+        window.clearTimeout(dragHideTimeoutRef.current);
+        dragHideTimeoutRef.current = null;
+      }
+      media.pause();
+      media.removeAttribute("src");
       ws.destroy();
+      media.destroy();
       internalWsRef.current = null;
       if (wavesurferRef) {
         wavesurferRef.current = null;
@@ -75,13 +133,56 @@ export function Waveform({
       regionsRef.current = null;
       loopRegionRef.current = null;
     };
-  }, [audioUrl, onReady, onTimeUpdate, wavesurferRef]);
+  }, [audioUrl, wavesurferRef]);
+
+  const scheduleDragTimesUpdate = (start: number, end: number, token: string) => {
+    dragTimesRef.current = { start, end, token };
+    if (dragRafRef.current !== null) return;
+    dragRafRef.current = requestAnimationFrame(() => {
+      dragRafRef.current = null;
+      if (dragTimesRef.current) {
+        setDragTimes(dragTimesRef.current);
+      }
+    });
+  };
+
+  // Loop points & looping mode (gapless WebAudio loop)
+  useEffect(() => {
+    if (!isWsReady || loopStart === undefined || loopEnd === undefined || !sampleRate) return;
+
+    const ws = internalWsRef.current;
+    if (!ws) return;
+
+    const rawStartTime = loopStart / sampleRate;
+    const rawEndTime = loopEnd / sampleRate;
+    if (!Number.isFinite(rawStartTime) || !Number.isFinite(rawEndTime)) return;
+
+    const duration = ws.getDuration();
+    const startTime = duration > 0 ? Math.max(0, Math.min(Math.min(rawStartTime, rawEndTime), duration)) : Math.max(0, Math.min(rawStartTime, rawEndTime));
+    const endTime = duration > 0 ? Math.max(0, Math.min(Math.max(rawStartTime, rawEndTime), duration)) : Math.max(0, Math.max(rawStartTime, rawEndTime));
+
+    const media = ws.getMediaElement() as unknown as Partial<LoopingWebAudioPlayer>;
+    if (typeof media.setLoopPoints === "function") {
+      media.setLoopPoints(startTime, endTime);
+    }
+    if (typeof media.setLooping === "function") {
+      media.setLooping(isLooping);
+    }
+  }, [isWsReady, loopStart, loopEnd, sampleRate, isLooping]);
 
   // 루프 영역 업데이트 - WaveSurfer가 ready 상태일 때만 실행
   useEffect(() => {
     if (!isWsReady || !regionsRef.current || loopStart === undefined || loopEnd === undefined || !sampleRate) {
       return;
     }
+
+    const token = `${loopStart}:${loopEnd}:${sampleRate}`;
+
+    if (dragHideTimeoutRef.current !== null) {
+      window.clearTimeout(dragHideTimeoutRef.current);
+      dragHideTimeoutRef.current = null;
+    }
+    dragTimesRef.current = null;
 
     // 기존 리전 제거
     if (loopRegionRef.current) {
@@ -113,8 +214,39 @@ export function Waveform({
       start: startTime,
       end: endTime,
       color: "rgba(34, 197, 94, 0.25)",
-      drag: false,
-      resize: false,
+      drag: true,
+      resize: true,
+      resizeStart: true,
+      resizeEnd: true,
+      minLength: 0.02,
+    });
+
+    // Live time display while dragging/resizing
+    loopRegionRef.current.on("update", () => {
+      const region = loopRegionRef.current;
+      if (!region) return;
+      scheduleDragTimesUpdate(region.start, region.end, token);
+    });
+
+    // Propagate manual edits back to parent (sample-accurate export)
+    loopRegionRef.current.on("update-end", () => {
+      const region = loopRegionRef.current;
+      if (!region) return;
+      const sr = sampleRate;
+      if (!Number.isFinite(sr) || sr <= 0) return;
+
+      scheduleDragTimesUpdate(region.start, region.end, token);
+      if (dragHideTimeoutRef.current !== null) {
+        window.clearTimeout(dragHideTimeoutRef.current);
+      }
+      dragHideTimeoutRef.current = window.setTimeout(() => {
+        setDragTimes(null);
+        dragTimesRef.current = null;
+      }, 700);
+
+      const nextStart = Math.round(region.start * sr);
+      const nextEnd = Math.round(region.end * sr);
+      onLoopChangeRef.current?.(nextStart, nextEnd);
     });
 
     // 구간의 시작/끝이 확실하게 보이도록 테두리 라인을 추가
@@ -143,8 +275,32 @@ export function Waveform({
     );
   }
 
+  const liveDragTimes = dragTimes?.token === currentLoopToken ? dragTimes : null;
+  const labelStartSeconds =
+    liveDragTimes?.start ?? (loopStart !== undefined && sampleRate ? loopStart / sampleRate : undefined);
+  const labelEndSeconds =
+    liveDragTimes?.end ?? (loopEnd !== undefined && sampleRate ? loopEnd / sampleRate : undefined);
+  const labelDurationSeconds =
+    labelStartSeconds !== undefined && labelEndSeconds !== undefined ? Math.max(0, labelEndSeconds - labelStartSeconds) : undefined;
+  const labelTitle =
+    labelStartSeconds !== undefined && labelEndSeconds !== undefined && sampleRate
+      ? `start=${Math.round(labelStartSeconds * sampleRate)} / end=${Math.round(labelEndSeconds * sampleRate)} samples`
+      : undefined;
+
   return (
-    <Card className="p-4">
+    <Card className="relative p-4">
+      {labelStartSeconds !== undefined && labelEndSeconds !== undefined && (
+        <div className="pointer-events-none absolute right-3 top-3 z-10" title={labelTitle}>
+          <div
+            className={`rounded-md border px-2 py-1 text-xs font-mono backdrop-blur ${
+              dragTimes ? "bg-primary/10 text-foreground" : "bg-background/70 text-muted-foreground"
+            }`}
+          >
+            {formatTimeMs(labelStartSeconds)} &rarr; {formatTimeMs(labelEndSeconds)}{" "}
+            {labelDurationSeconds !== undefined && `(${formatTimeMs(labelDurationSeconds)})`}
+          </div>
+        </div>
+      )}
       <div ref={containerRef} className="w-full" />
     </Card>
   );

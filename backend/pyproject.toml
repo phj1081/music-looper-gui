@@ -2,16 +2,37 @@
 name = "music-looper"
 version = "0.1.0"
 description = "Music Looper Desktop App - Find perfect loop points in audio files"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 dependencies = [
     "pywebview>=5.0.0",
     "numpy",
-    "librosa",
+    "librosa>=0.10.0",
     "torch",
     "torchaudio",
     "transformers",
+    "setuptools<81",
     "mutagen",
     "soundfile",
+]
+
+[project.optional-dependencies]
+# Beat alignment requires madmom (may have numpy compatibility issues)
+beat = [
+    "madmom>=0.16.1",
+]
+# Structure analysis requires allin1
+structure = [
+    # allin1 uses madmom utilities for spectrogram extraction.
+    "madmom>=0.16.1",
+    "allin1==1.1.0",
+    # allin1 expects the pre-0.20 natten API (natten1dav, natten2dav, etc.).
+    "natten==0.17.5; platform_system == 'Darwin'",
+]
+# All optional features
+all = [
+    "madmom>=0.16.1",
+    "allin1==1.1.0",
+    "natten==0.17.5; platform_system == 'Darwin'",
 ]
 
 [project.scripts]
@@ -21,6 +42,9 @@ music-looper = "app:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["."]
-only-include = ["app.py", "deep_analyzer.py"]
+only-include = ["app.py", "deep_analyzer.py", "allin1_enhancer.py"]

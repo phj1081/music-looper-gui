@@ -1,0 +1,13 @@
+{
+  "name": "music-looper-gui",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:frontend": "pnpm -C frontend dev",
+    "dev:backend": "cd backend && MUSIC_LOOPER_DEV=1 uv run python app.py",
+    "build": "bash ./build.sh",
+    "start": "cd backend && uv run python app.py",
+    "lint": "pnpm -C frontend lint && cd backend && uv run python -m py_compile app.py deep_analyzer.py allin1_enhancer.py"
+  }
+}
+

@@ -21,24 +21,23 @@ export function PlayerControls({
   return (
     <div className="flex items-center gap-2">
       <Button
-        variant={isPlaying ? "secondary" : "default"}
-        size="lg"
-        onClick={onPlayPause}
-        disabled={disabled}
-      >
-        {isPlaying ? (
-          <>
-            <Pause className="mr-2 h-5 w-5" />
-            정지
-          </>
-        ) : (
-          <>
-            <Play className="mr-2 h-5 w-5" />
-            미리듣기
-          </>
-        )}
-      </Button>
-
+          variant={isPlaying ? "secondary" : "default"}
+          size="lg"
+          onClick={onPlayPause}
+          disabled={disabled}
+        >
+          {isPlaying ? (
+            <>
+              <Pause className="mr-2 h-5 w-5" />
+              정지
+            </>
+          ) : (
+            <>
+              <Play className="mr-2 h-5 w-5" />
+              미리듣기
+            </>
+          )}
+        </Button>
       <Button
         variant={isLooping ? "default" : "outline"}
         size="lg"

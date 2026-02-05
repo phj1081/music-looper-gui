@@ -41,13 +41,17 @@ interface ExportMenuProps {
   loopStart: number;
   loopEnd: number;
   disabled: boolean;
-  onStatusChange?: (message: string) => void;
+  open?: boolean | undefined;
+  onOpenChange?: ((open: boolean) => void) | undefined;
+  onStatusChange?: ((message: string) => void) | undefined;
 }
 
 export function ExportMenu({
   loopStart,
   loopEnd,
   disabled,
+  open,
+  onOpenChange,
   onStatusChange,
 }: ExportMenuProps) {
   const [isExtendedDialogOpen, setIsExtendedDialogOpen] = useState(false);
@@ -123,9 +127,14 @@ export function ExportMenu({
       "루프 정보 (TXT) 내보내기 완료"
     );
 
+  const dropdownProps = {
+    ...(open !== undefined && { open }),
+    ...(onOpenChange !== undefined && { onOpenChange }),
+  };
+
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu {...dropdownProps}>
         <DropdownMenuTrigger asChild>
           <Button
             variant="outline"
