@@ -50,6 +50,66 @@ def _ensure_natten_torch_compat() -> None:
             if _name not in np.__dict__:
                 setattr(np, _name, _alias)
 
+        # NumPy 2.x compatibility: madmom's DBNDownBeatTrackingProcessor uses
+        # `np.asarray(results)` on ragged sequences which now raises ValueError.
+        # Patch the processor to fall back to a safe implementation.
+        try:
+            from madmom.features.downbeats import DBNDownBeatTrackingProcessor
+
+            if not getattr(DBNDownBeatTrackingProcessor.process, "_music_looper_numpy2_patch", False):
+                _orig_process = DBNDownBeatTrackingProcessor.process
+
+                def _process_numpy2_safe(self, activations, **kwargs):  # type: ignore[override]
+                    try:
+                        return _orig_process(self, activations, **kwargs)
+                    except ValueError as e:
+                        if "setting an array element with a sequence" not in str(e):
+                            raise
+
+                        first = 0
+                        if getattr(self, "threshold", None):
+                            idx = np.nonzero(activations >= self.threshold)[0]
+                            if idx.any():
+                                first = max(first, int(np.min(idx)))
+                                last = min(len(activations), int(np.max(idx)) + 1)
+                            else:
+                                last = first
+                            activations = activations[first:last]
+
+                        if not activations.any():
+                            return np.empty((0, 2))
+
+                        results = [hmm.viterbi(activations) for hmm in self.hmms]
+                        best = max(range(len(results)), key=lambda i: float(results[i][1]))
+                        path, _ = results[best]
+
+                        st = self.hmms[best].transition_model.state_space
+                        om = self.hmms[best].observation_model
+                        positions = st.state_positions[path]
+                        beat_numbers = positions.astype(int) + 1
+
+                        if getattr(self, "correct", False):
+                            beats = np.empty(0, dtype=int)
+                            beat_range = om.pointers[path] >= 1
+                            idx = np.nonzero(np.diff(beat_range.astype(int)))[0] + 1
+                            if beat_range[0]:
+                                idx = np.r_[0, idx]
+                            if beat_range[-1]:
+                                idx = np.r_[idx, beat_range.size]
+                            if idx.any():
+                                for left, right in idx.reshape((-1, 2)):
+                                    peak = np.argmax(activations[left:right]) // 2 + int(left)
+                                    beats = np.hstack((beats, peak))
+                        else:
+                            beats = np.nonzero(np.diff(beat_numbers))[0] + 1
+
+                        return np.vstack(((beats + first) / float(self.fps), beat_numbers[beats])).T
+
+                _process_numpy2_safe._music_looper_numpy2_patch = True  # type: ignore[attr-defined]
+                DBNDownBeatTrackingProcessor.process = _process_numpy2_safe  # type: ignore[assignment]
+        except Exception:
+            pass
+
         import torch
 
         cuda_mod = getattr(torch, "cuda", None)
@@ -178,7 +238,8 @@ class Allin1Enhancer:
             # - beats: List[float] - beat times
             # - downbeats: List[float] - downbeat times
             # - segments: List[Segment] with start, end, label
-            result = allin1.analyze(self.file_path)
+            # Disable multiprocessing for better reliability in GUI/embedded contexts.
+            result = allin1.analyze(self.file_path, multiprocess=False)
 
             # Convert to our StructureInfo format
             segments = []

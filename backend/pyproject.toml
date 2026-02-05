@@ -25,6 +25,8 @@ structure = [
     # allin1 uses madmom utilities for spectrogram extraction.
     "madmom>=0.16.1",
     "allin1==1.1.0",
+    # demucs (used by allin1) saves audio via torchaudio which requires torchcodec
+    "torchcodec>=0.10.0",
     # allin1 expects the pre-0.20 natten API (natten1dav, natten2dav, etc.).
     "natten==0.17.5; platform_system == 'Darwin'",
 ]
@@ -32,6 +34,7 @@ structure = [
 all = [
     "madmom>=0.16.1",
     "allin1==1.1.0",
+    "torchcodec>=0.10.0",
     "natten==0.17.5; platform_system == 'Darwin'",
 ]
 

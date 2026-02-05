@@ -717,9 +717,63 @@ class BeatAlignedAnalyzer:
             beats_per_bar=[3, 4],  # 3/4 and 4/4 time
             fps=100
         )
-        self._downbeats = dbn(act)
+        try:
+            self._downbeats = dbn(act)
+        except ValueError:
+            # NumPy 2.x compatibility: madmom's DBNDownBeatTrackingProcessor
+            # uses `np.asarray(results)` where `results` is a list of
+            # (ndarray, float) tuples, which raises on newer NumPy.
+            self._downbeats = self._process_dbn_safe(dbn, act)
 
         return self._downbeats
+
+    @staticmethod
+    def _process_dbn_safe(dbn, activations: np.ndarray) -> np.ndarray:
+        """Fallback DBN decoding compatible with NumPy 2.x.
+
+        Mirrors `madmom.features.downbeats.DBNDownBeatTrackingProcessor.process`
+        but avoids `np.asarray(results)` on ragged sequences.
+        """
+        # Based on madmom 0.16.1 implementation
+        first = 0
+        if getattr(dbn, "threshold", None):
+            idx = np.nonzero(activations >= dbn.threshold)[0]
+            if idx.any():
+                first = max(first, int(np.min(idx)))
+                last = min(len(activations), int(np.max(idx)) + 1)
+            else:
+                last = first
+            activations = activations[first:last]
+
+        if not activations.any():
+            return np.empty((0, 2))
+
+        # Decode with each HMM and pick the best log-probability.
+        results = [hmm.viterbi(activations) for hmm in dbn.hmms]
+        best = max(range(len(results)), key=lambda i: float(results[i][1]))
+        path, _ = results[best]
+
+        st = dbn.hmms[best].transition_model.state_space
+        om = dbn.hmms[best].observation_model
+        positions = st.state_positions[path]
+        beat_numbers = positions.astype(int) + 1
+
+        if getattr(dbn, "correct", False):
+            beats = np.empty(0, dtype=int)
+            beat_range = om.pointers[path] >= 1
+            idx = np.nonzero(np.diff(beat_range.astype(int)))[0] + 1
+            if beat_range[0]:
+                idx = np.r_[0, idx]
+            if beat_range[-1]:
+                idx = np.r_[idx, beat_range.size]
+            if idx.any():
+                for left, right in idx.reshape((-1, 2)):
+                    peak = np.argmax(activations[left:right]) // 2 + int(left)
+                    beats = np.hstack((beats, peak))
+        else:
+            beats = np.nonzero(np.diff(beat_numbers))[0] + 1
+
+        return np.vstack(((beats + first) / float(dbn.fps), beat_numbers[beats])).T
 
     def get_bar_boundaries(self, progress_callback=None) -> np.ndarray:
         """Get bar (measure) start times.
