@@ -101,6 +101,8 @@ class MusicLooperCore:
         self._use_allin1 = Allin1Enhancer.is_available() and not _is_truthy_env(
             "MUSIC_LOOPER_DISABLE_STRUCTURE"
         )
+        self._deep_analyzer = None
+        self._allin1_enhancer = None
 
         try:
             self._audio, self._sr = librosa.load(file_path, sr=None, mono=False)
@@ -125,6 +127,8 @@ class MusicLooperCore:
         self._use_allin1 = Allin1Enhancer.is_available() and not _is_truthy_env(
             "MUSIC_LOOPER_DISABLE_STRUCTURE"
         )
+        self._deep_analyzer = None
+        self._allin1_enhancer = None
         self._analysis_progress = {"current": 0, "total": 0, "stage": "starting"}
         self._analysis_result = None
 
@@ -543,7 +547,14 @@ class MusicLooperCore:
         except Exception:
             pass
 
-        return self._build_result(candidates, use_allin1)
+        beat_effective = self._compute_beat_effective(candidates, use_beat_alignment)
+        structure_effective = self._compute_structure_effective(candidates, use_allin1)
+        return self._build_result(
+            candidates,
+            use_allin1,
+            beat_effective=beat_effective,
+            structure_effective=structure_effective,
+        )
 
     def _analyze_ast_with_progress(self, file_path: str, use_beat_alignment: bool = False, use_allin1: bool = False) -> dict:
         """AST analysis with progress tracking."""
@@ -624,18 +635,72 @@ class MusicLooperCore:
         except Exception:
             pass
 
-        return self._build_result(candidates, use_allin1)
+        beat_effective = self._compute_beat_effective(candidates, use_beat_alignment)
+        structure_effective = self._compute_structure_effective(candidates, use_allin1)
+        return self._build_result(
+            candidates,
+            use_allin1,
+            beat_effective=beat_effective,
+            structure_effective=structure_effective,
+        )
 
-    def _build_result(self, candidates, use_allin1: bool) -> dict:
-        """Build the analysis result dict from candidates."""
-        loops = []
-        beat_effective = any("beat" in str(getattr(cand, "algorithm", "")).lower() for cand in candidates)
-        structure_effective = any(
+    def _compute_beat_effective(self, candidates, use_beat_alignment: bool) -> bool:
+        """Determine whether beat alignment was actually applied."""
+        if not use_beat_alignment:
+            return False
+
+        if any("beat" in str(getattr(cand, "algorithm", "")).lower() for cand in candidates):
+            return True
+
+        beat_analyzer = getattr(getattr(self._deep_analyzer, "_beat_analyzer", None), "_downbeats", None)
+        if beat_analyzer is None:
+            return False
+        try:
+            return len(beat_analyzer) > 0
+        except Exception:
+            return True
+
+    def _compute_structure_effective(self, candidates, use_allin1: bool) -> bool:
+        """Determine whether structure analysis produced usable structure info."""
+        if not use_allin1:
+            return False
+
+        candidate_marked = any(
             bool(getattr(cand, "start_segment", None))
             or bool(getattr(cand, "end_segment", None))
             or float(getattr(cand, "structure_boost", 0.0) or 0.0) > 0.0
             for cand in candidates
         )
+        if candidate_marked:
+            return True
+
+        if self._allin1_enhancer is None:
+            return False
+
+        try:
+            structure_info = self._allin1_enhancer.get_structure_info()
+        except Exception:
+            return False
+
+        if structure_info is None:
+            return False
+
+        return (
+            bool(getattr(structure_info, "downbeats", None))
+            or bool(getattr(structure_info, "segments", None))
+            or float(getattr(structure_info, "bpm", 0.0) or 0.0) > 0.0
+        )
+
+    def _build_result(
+        self,
+        candidates,
+        use_allin1: bool,
+        *,
+        beat_effective: bool = False,
+        structure_effective: bool = False,
+    ) -> dict:
+        """Build the analysis result dict from candidates."""
+        loops = []
         for i, cand in enumerate(candidates):
             loop_data = {
                 "index": i,

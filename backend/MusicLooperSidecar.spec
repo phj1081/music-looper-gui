@@ -8,7 +8,7 @@ import importlib.util
 import re
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 
 OPTIONAL_PACKAGES = [
@@ -17,6 +17,12 @@ OPTIONAL_PACKAGES = [
     "allin1",
     "natten",
     "demucs",
+    "torchcodec",
+]
+
+METADATA_PACKAGES = [
+    # transformers.audio_utils checks torchcodec version via importlib.metadata
+    # in runtime; include distribution metadata in frozen builds.
     "torchcodec",
 ]
 
@@ -73,6 +79,12 @@ for package in OPTIONAL_PACKAGES:
         pass
     try:
         datas += collect_data_files(package)
+    except Exception:
+        pass
+
+for package in METADATA_PACKAGES:
+    try:
+        datas += copy_metadata(package)
     except Exception:
         pass
 

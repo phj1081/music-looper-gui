@@ -16,7 +16,10 @@ import collections.abc
 import contextlib
 import numpy as np
 import sys
+import os
+import tempfile
 import warnings
+from pathlib import Path
 
 if TYPE_CHECKING:
     from deep_analyzer import DeepLoopCandidate
@@ -303,6 +306,8 @@ class Allin1Enhancer:
         allin1 = self._load_model()
         self._emit_progress(progress_callback, 1, 1, "loading_structure_model")
 
+        demix_dir, spec_dir = self._resolve_runtime_cache_dirs()
+
         try:
             # allin1.analyze returns a Result object with:
             # - bpm: float
@@ -313,7 +318,12 @@ class Allin1Enhancer:
             self._emit_progress(progress_callback, 0, 1, "analyzing_structure")
             # Keep sidecar stdout JSON-only; send library logs/progress text to stderr.
             with contextlib.redirect_stdout(sys.stderr):
-                result = allin1.analyze(self.file_path, multiprocess=False)
+                result = allin1.analyze(
+                    self.file_path,
+                    multiprocess=False,
+                    demix_dir=demix_dir.as_posix(),
+                    spec_dir=spec_dir.as_posix(),
+                )
 
             # Convert to our StructureInfo format
             segments = []
@@ -346,6 +356,35 @@ class Allin1Enhancer:
                 segments=[],
             )
             return self._structure_info
+
+    @staticmethod
+    def _resolve_runtime_cache_dirs() -> Tuple[Path, Path]:
+        """Resolve writable cache directories for allin1 byproducts.
+
+        allin1 defaults to relative './demix' and './spec', which depend on the
+        process working directory. In packaged app contexts this can point inside
+        the app bundle, leading to unstable behavior across environments.
+        """
+        custom_root = os.getenv("MUSIC_LOOPER_CACHE_DIR")
+        if custom_root:
+            cache_root = Path(custom_root).expanduser()
+        else:
+            if sys.platform == "darwin":
+                cache_root = Path.home() / "Library" / "Caches" / "music-looper"
+            elif os.name == "nt":
+                localappdata = os.getenv("LOCALAPPDATA")
+                if localappdata:
+                    cache_root = Path(localappdata) / "music-looper"
+                else:
+                    cache_root = Path(tempfile.gettempdir()) / "music-looper"
+            else:
+                cache_root = Path.home() / ".cache" / "music-looper"
+
+        demix_dir = cache_root / "allin1_demix"
+        spec_dir = cache_root / "allin1_spec"
+        demix_dir.mkdir(parents=True, exist_ok=True)
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        return demix_dir, spec_dir
 
     def snap_to_downbeat(
         self,

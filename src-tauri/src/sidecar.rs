@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::sync::Mutex;
 use tauri::AppHandle;
 use tauri::Manager;
 use tauri_plugin_shell::process::CommandEvent;
@@ -6,7 +7,17 @@ use tauri_plugin_shell::ShellExt;
 
 /// The only state Rust needs: the port the Python HTTP server is listening on.
 pub struct ServerState {
-    pub port: u16,
+    pub port: Mutex<Option<u16>>,
+    pub startup_error: Mutex<Option<String>>,
+}
+
+impl Default for ServerState {
+    fn default() -> Self {
+        Self {
+            port: Mutex::new(None),
+            startup_error: Mutex::new(None),
+        }
+    }
 }
 
 /// Spawn the Python sidecar and read the port it prints to stdout.
@@ -58,6 +69,12 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), String> {
     };
 
     log::info!("Sidecar HTTP server on port {}", port);
-    app.manage(ServerState { port });
+    let state = app.state::<ServerState>();
+    if let Ok(mut stored_port) = state.port.lock() {
+        *stored_port = Some(port);
+    }
+    if let Ok(mut startup_error) = state.startup_error.lock() {
+        *startup_error = None;
+    }
     Ok(())
 }

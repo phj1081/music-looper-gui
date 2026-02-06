@@ -294,9 +294,9 @@ export default function Home() {
       setStatus("ready");
     } catch (error) {
       setStatus("error");
-      setStatusMessage(
-        error instanceof Error ? error.message : "오류가 발생했습니다"
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("Analyze error:", error);
+      setStatusMessage(msg || "오류가 발생했습니다");
     } finally {
       unlistenProgress?.();
       unlistenComplete?.();
@@ -406,9 +406,9 @@ export default function Home() {
       await handleAnalyzeFile(result.path, result.filename);
     } catch (error) {
       setStatus("error");
-      setStatusMessage(
-        error instanceof Error ? error.message : "오류가 발생했습니다"
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("Analyze error:", error);
+      setStatusMessage(msg || "오류가 발생했습니다");
     }
   }, [handleAnalyzeFile]);
 
@@ -620,7 +620,21 @@ export default function Home() {
             </div>
           )}
 
-          {(status === "ready" || status === "error") && (
+          {status === "error" && (
+            <Card className="p-6 space-y-4">
+              <div className="space-y-1">
+                <h2 className="text-lg font-semibold">{filename}</h2>
+                <p className="text-sm text-destructive">{statusMessage}</p>
+              </div>
+              <div className="flex justify-end">
+                <Button variant="outline" onClick={handleReset}>
+                  다른 파일 선택
+                </Button>
+              </div>
+            </Card>
+          )}
+
+          {status === "ready" && analysisResult && (
             <>
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -628,7 +642,7 @@ export default function Home() {
                   <p className="text-sm text-muted-foreground">
                     {statusMessage}
                   </p>
-                  {analysisResult?.enhancements && (
+                  {analysisResult.enhancements && (
                     <div className="mt-2 flex flex-wrap gap-2">
                       <Badge
                         variant={
@@ -683,7 +697,7 @@ export default function Home() {
                   audioUrl={audioDataUrl}
                   loopStart={selectedLoop?.start_sample}
                   loopEnd={selectedLoop?.end_sample}
-                  sampleRate={analysisResult?.sample_rate}
+                  sampleRate={analysisResult.sample_rate}
                   isLooping={isLooping}
                   isPlaying={isPlaying}
                   onReady={handleWaveformReady}
@@ -737,8 +751,8 @@ export default function Home() {
                     : "loop-editor-empty"
                 }
                 loop={selectedLoop}
-                sampleRate={analysisResult?.sample_rate}
-                durationSeconds={analysisResult?.duration}
+                sampleRate={analysisResult.sample_rate}
+                durationSeconds={analysisResult.duration}
                 onChange={handleLoopChange}
               />
 

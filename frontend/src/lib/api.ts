@@ -63,7 +63,11 @@ let serverPort: number | null = null;
 
 async function getBaseUrl(): Promise<string> {
   if (!serverPort) {
-    serverPort = await invoke<number>("get_server_port");
+    const port = await invoke<number>("get_server_port");
+    if (!Number.isFinite(port) || port <= 0) {
+      throw new Error("분석 서버 포트가 올바르지 않습니다");
+    }
+    serverPort = port;
   }
   return `http://127.0.0.1:${serverPort}`;
 }
@@ -96,17 +100,34 @@ export async function analyzeFile(filePath: string): Promise<AnalyzeResponse> {
     body: JSON.stringify({ file_path: filePath }),
   });
 
-  const result = (await response.json()) as AnalyzeResult;
+  let result: AnalyzeResult | null = null;
+  try {
+    result = (await response.json()) as AnalyzeResult;
+  } catch {
+    result = null;
+  }
 
-  if (!result.success) {
-    throw new Error(result.error || "Analysis failed");
+  if (!response.ok) {
+    throw new Error(result?.error || `Analysis request failed (${response.status})`);
+  }
+
+  if (!result?.success) {
+    throw new Error(result?.error || "Analysis failed");
+  }
+
+  if (
+    !Array.isArray(result.loops) ||
+    typeof result.duration !== "number" ||
+    typeof result.sample_rate !== "number"
+  ) {
+    throw new Error("Analysis response is invalid");
   }
 
   return {
-    duration: result.duration!,
-    sample_rate: result.sample_rate!,
+    duration: result.duration,
+    sample_rate: result.sample_rate,
     enhancements: result.enhancements,
-    loops: result.loops!,
+    loops: result.loops,
   };
 }
 
