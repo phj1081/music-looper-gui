@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Music Looper Desktop App - Find perfect loop points in audio files"
 requires-python = ">=3.10,<3.13"
 dependencies = [
-    "pywebview>=5.0.0",
     "numpy",
     "librosa>=0.10.0",
     "torch",
@@ -13,9 +12,15 @@ dependencies = [
     "setuptools<81",
     "mutagen",
     "soundfile",
+    "fastapi",
+    "uvicorn",
 ]
 
 [project.optional-dependencies]
+# PyWebView is only needed for the legacy app.py mode (non-Tauri)
+legacy-gui = [
+    "pywebview>=5.0.0",
+]
 # Beat alignment requires madmom (may have numpy compatibility issues)
 beat = [
     "madmom>=0.16.1",
@@ -50,4 +55,4 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
-only-include = ["app.py", "deep_analyzer.py", "allin1_enhancer.py"]
+only-include = ["app.py", "core.py", "server.py", "http_server.py", "deep_analyzer.py", "allin1_enhancer.py"]

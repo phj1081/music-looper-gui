@@ -28,6 +28,12 @@ Thumbs.db
 
 # Build artifacts
 *.spec
+!backend/MusicLooperSidecar.spec
 backend/static/
 backend/build/
 backend/dist/
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/music-looper-sidecar-*

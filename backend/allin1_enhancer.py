@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple, TYPE_CHECKING
 import collections
 import collections.abc
+import contextlib
 import numpy as np
+import sys
 import warnings
 
 if TYPE_CHECKING:
@@ -180,6 +182,8 @@ class Allin1Enhancer:
     """Enhances loop candidates using allin1 music structure analysis."""
 
     _model = None
+    _model_repo_id = "taejunkim/allinone"
+    _default_model_name = "harmonix-all"
 
     def __init__(self, file_path: str):
         """Initialize enhancer with audio file.
@@ -212,6 +216,72 @@ class Allin1Enhancer:
         cls._model = allin1
         return cls._model
 
+    @staticmethod
+    def _emit_progress(progress_callback, current: int, total: int, stage: str) -> None:
+        if progress_callback:
+            progress_callback(current, total, stage)
+
+    @classmethod
+    def _get_model_checkpoint_filenames(cls) -> List[str]:
+        """Resolve checkpoint filenames for the default allin1 model preset."""
+        _ensure_natten_torch_compat()
+        from allin1.models.loaders import ENSEMBLE_MODELS, NAME_TO_FILE
+
+        model_name = cls._default_model_name
+        model_keys = ENSEMBLE_MODELS.get(model_name, [model_name])
+
+        filenames: List[str] = []
+        for key in model_keys:
+            filename = NAME_TO_FILE.get(key)
+            if filename:
+                filenames.append(filename)
+        return filenames
+
+    @classmethod
+    def _ensure_model_files_downloaded(cls, progress_callback=None) -> None:
+        """Ensure allin1 checkpoint files are present in HF cache.
+
+        Emits:
+        - checking_structure_model
+        - downloading_structure_model
+        """
+        cls._emit_progress(progress_callback, 0, 1, "checking_structure_model")
+
+        try:
+            from huggingface_hub import hf_hub_download
+        except Exception:
+            # If huggingface_hub is unavailable, let downstream allin1 call fail normally.
+            cls._emit_progress(progress_callback, 1, 1, "checking_structure_model")
+            return
+
+        filenames = cls._get_model_checkpoint_filenames()
+        cls._emit_progress(progress_callback, 1, 1, "checking_structure_model")
+
+        if not filenames:
+            cls._emit_progress(progress_callback, 1, 1, "downloading_structure_model")
+            return
+
+        missing_files: List[str] = []
+        for filename in filenames:
+            try:
+                hf_hub_download(
+                    repo_id=cls._model_repo_id,
+                    filename=filename,
+                    local_files_only=True,
+                )
+            except Exception:
+                missing_files.append(filename)
+
+        if not missing_files:
+            cls._emit_progress(progress_callback, 1, 1, "downloading_structure_model")
+            return
+
+        total = len(missing_files)
+        cls._emit_progress(progress_callback, 0, total, "downloading_structure_model")
+        for index, filename in enumerate(missing_files, start=1):
+            hf_hub_download(repo_id=cls._model_repo_id, filename=filename)
+            cls._emit_progress(progress_callback, index, total, "downloading_structure_model")
+
     def analyze_structure(self, progress_callback=None) -> StructureInfo:
         """Analyze music structure using allin1.
 
@@ -227,10 +297,11 @@ class Allin1Enhancer:
         if not self.is_available():
             raise ImportError("allin1 is required for structure analysis. Install with: pip install allin1")
 
-        if progress_callback:
-            progress_callback(0, 1, "analyzing_structure")
+        self._ensure_model_files_downloaded(progress_callback)
 
+        self._emit_progress(progress_callback, 0, 1, "loading_structure_model")
         allin1 = self._load_model()
+        self._emit_progress(progress_callback, 1, 1, "loading_structure_model")
 
         try:
             # allin1.analyze returns a Result object with:
@@ -239,7 +310,10 @@ class Allin1Enhancer:
             # - downbeats: List[float] - downbeat times
             # - segments: List[Segment] with start, end, label
             # Disable multiprocessing for better reliability in GUI/embedded contexts.
-            result = allin1.analyze(self.file_path, multiprocess=False)
+            self._emit_progress(progress_callback, 0, 1, "analyzing_structure")
+            # Keep sidecar stdout JSON-only; send library logs/progress text to stderr.
+            with contextlib.redirect_stdout(sys.stderr):
+                result = allin1.analyze(self.file_path, multiprocess=False)
 
             # Convert to our StructureInfo format
             segments = []
@@ -257,8 +331,8 @@ class Allin1Enhancer:
                 segments=segments,
             )
 
-            if progress_callback:
-                progress_callback(1, 1, "structure_complete")
+            self._emit_progress(progress_callback, 1, 1, "analyzing_structure")
+            self._emit_progress(progress_callback, 1, 1, "structure_complete")
 
             return self._structure_info
 

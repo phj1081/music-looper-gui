@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin, { Region } from "wavesurfer.js/dist/plugins/regions.js";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { LoopingWebAudioPlayer } from "@/lib/looping-webaudio-player";
 
 function formatTimeMs(seconds: number): string {
@@ -38,11 +39,17 @@ export function Waveform({
   onLoopChange,
   wavesurferRef,
 }: WaveformProps) {
+  const ZOOM_MIN = 0;
+  const ZOOM_MAX = 2000;
+  const ZOOM_STEP = 50;
+
   const containerRef = useRef<HTMLDivElement>(null);
   const internalWsRef = useRef<WaveSurfer | null>(null);
   const regionsRef = useRef<RegionsPlugin | null>(null);
   const loopRegionRef = useRef<Region | null>(null);
   const [isWsReady, setIsWsReady] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [zoomPxPerSec, setZoomPxPerSec] = useState<number>(0);
   const currentLoopToken = `${loopStart ?? "x"}:${loopEnd ?? "x"}:${sampleRate}`;
   const [dragTimes, setDragTimes] = useState<{ start: number; end: number; token: string } | null>(null);
   const dragTimesRef = useRef<{ start: number; end: number; token: string } | null>(null);
@@ -51,6 +58,16 @@ export function Waveform({
   const onReadyRef = useRef(onReady);
   const onTimeUpdateRef = useRef(onTimeUpdate);
   const onLoopChangeRef = useRef(onLoopChange);
+
+  const clampZoom = useCallback(
+    (value: number) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(value))),
+    [ZOOM_MAX, ZOOM_MIN],
+  );
+
+  const zoomLabel = useMemo(() => {
+    if (zoomPxPerSec <= 0) return "맞춤";
+    return `${zoomPxPerSec}px/s`;
+  }, [zoomPxPerSec]);
 
   useEffect(() => {
     onReadyRef.current = onReady;
@@ -94,15 +111,22 @@ export function Waveform({
         if (message.includes("fetch is aborted") || message.includes("aborted")) return;
       }
       console.error("WaveSurfer load error:", err);
+      setLoadError("오디오/파형 로딩 실패");
     });
 
     ws.on("ready", () => {
+      setLoadError(null);
       setIsWsReady(true);
       onReadyRef.current?.();
     });
 
     ws.on("timeupdate", (time) => {
       onTimeUpdateRef.current?.(time);
+    });
+
+    ws.on("error", (err) => {
+      console.error("WaveSurfer error:", err);
+      setLoadError("오디오/파형 로딩 실패");
     });
 
     internalWsRef.current = ws;
@@ -112,6 +136,7 @@ export function Waveform({
 
     return () => {
       setIsWsReady(false);
+      setLoadError(null);
       setDragTimes(null);
       dragTimesRef.current = null;
       if (dragRafRef.current !== null) {
@@ -130,10 +155,35 @@ export function Waveform({
       if (wavesurferRef) {
         wavesurferRef.current = null;
       }
+      if (audioUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(audioUrl);
+      }
       regionsRef.current = null;
       loopRegionRef.current = null;
     };
   }, [audioUrl, wavesurferRef]);
+
+  useEffect(() => {
+    if (!isWsReady) return;
+    const ws = internalWsRef.current;
+    if (!ws) return;
+    ws.zoom(clampZoom(zoomPxPerSec));
+  }, [clampZoom, isWsReady, zoomPxPerSec]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const direction = e.deltaY > 0 ? -1 : 1;
+      setZoomPxPerSec((prev) => clampZoom(prev + direction * ZOOM_STEP));
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [clampZoom]);
 
   const scheduleDragTimesUpdate = (start: number, end: number, token: string) => {
     dragTimesRef.current = { start, end, token };
@@ -252,8 +302,30 @@ export function Waveform({
     // 구간의 시작/끝이 확실하게 보이도록 테두리 라인을 추가
     const regionEl = loopRegionRef.current.element;
     if (regionEl) {
-      regionEl.style.borderLeft = "2px solid rgba(34, 197, 94, 0.95)";
-      regionEl.style.borderRight = "2px solid rgba(34, 197, 94, 0.95)";
+      const handleWidthPx = 22;
+      const handleBg = "rgba(34, 197, 94, 0.10)";
+      const handleBorder = "3px solid rgba(34, 197, 94, 0.95)";
+
+      regionEl.style.borderLeft = handleBorder;
+      regionEl.style.borderRight = handleBorder;
+      regionEl.style.boxSizing = "border-box";
+
+      const leftHandle = regionEl.querySelector<HTMLElement>('[part*="region-handle-left"]');
+      const rightHandle = regionEl.querySelector<HTMLElement>('[part*="region-handle-right"]');
+
+      if (leftHandle) {
+        leftHandle.style.width = `${handleWidthPx}px`;
+        leftHandle.style.borderLeft = handleBorder;
+        leftHandle.style.backgroundColor = handleBg;
+        leftHandle.style.touchAction = "none";
+      }
+
+      if (rightHandle) {
+        rightHandle.style.width = `${handleWidthPx}px`;
+        rightHandle.style.borderRight = handleBorder;
+        rightHandle.style.backgroundColor = handleBg;
+        rightHandle.style.touchAction = "none";
+      }
     }
   }, [isWsReady, loopStart, loopEnd, sampleRate]);
 
@@ -289,6 +361,11 @@ export function Waveform({
 
   return (
     <Card className="relative p-4">
+      {loadError && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-md bg-background/80">
+          <p className="text-sm text-muted-foreground">{loadError}</p>
+        </div>
+      )}
       {labelStartSeconds !== undefined && labelEndSeconds !== undefined && (
         <div className="pointer-events-none absolute right-3 top-3 z-10" title={labelTitle}>
           <div
@@ -301,6 +378,43 @@ export function Waveform({
           </div>
         </div>
       )}
+
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-muted-foreground">확대</span>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-xs"
+          onClick={() => setZoomPxPerSec((prev) => clampZoom(prev - ZOOM_STEP))}
+          title="축소"
+        >
+          -
+        </Button>
+        <input
+          type="range"
+          min={ZOOM_MIN}
+          max={ZOOM_MAX}
+          step={10}
+          value={zoomPxPerSec}
+          onChange={(e) => setZoomPxPerSec(clampZoom(Number(e.target.value)))}
+          className="h-2 w-40 cursor-pointer accent-primary"
+          aria-label="파형 확대/축소"
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-xs"
+          onClick={() => setZoomPxPerSec((prev) => clampZoom(prev + ZOOM_STEP))}
+          title="확대"
+        >
+          +
+        </Button>
+        <Button type="button" variant="ghost" size="xs" onClick={() => setZoomPxPerSec(0)} title="맞춤(전체 보기)">
+          맞춤
+        </Button>
+        <span className="text-xs font-mono text-muted-foreground">{zoomLabel}</span>
+        <span className="text-xs text-muted-foreground">Ctrl/⌘ + 스크롤로도 확대/축소</span>
+      </div>
       <div ref={containerRef} className="w-full" />
     </Card>
   );

@@ -5,9 +5,11 @@
     "dev": "node scripts/dev.mjs",
     "dev:frontend": "pnpm -C frontend dev",
     "dev:backend": "cd backend && MUSIC_LOOPER_DEV=1 uv run python app.py",
+    "dev:tauri": "./frontend/node_modules/.bin/tauri dev",
     "build": "bash ./build.sh",
+    "build:tauri": "bash ./build.sh",
     "start": "cd backend && uv run python app.py",
-    "lint": "pnpm -C frontend lint && cd backend && uv run python -m py_compile app.py deep_analyzer.py allin1_enhancer.py"
+    "lint": "pnpm -C frontend lint && cd backend && uv run python -m py_compile app.py deep_analyzer.py allin1_enhancer.py core.py server.py http_server.py"
   }
 }
 

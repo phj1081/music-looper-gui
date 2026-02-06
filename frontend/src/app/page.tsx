@@ -18,10 +18,9 @@ import {
 } from "@/components/ui/select";
 import {
   selectFile,
-  analyzeFileAsync,
-  getProgress,
-  getAnalysisResult,
-  getAudioBase64,
+  analyzeFile,
+  getAudioUrl,
+  onProgress,
   type LoopPoint,
   type AnalyzeResponse,
   type ProgressResponse,
@@ -48,11 +47,55 @@ const stageMessages: Record<string, string> = {
   computing_recurrence: "반복 행렬 계산 중...",
   enhancing_paths: "경로 강화 중...",
   detecting_beats: "박자 탐지 중...",
+  checking_structure_model: "구조 모델 확인 중...",
+  downloading_structure_model: "구조 모델 다운로드 중...",
+  loading_structure_model: "구조 모델 로딩 중...",
   analyzing_structure: "구조 분석 중 (allin1)...",
   refining_seam: "이음새 미세조정 중...",
   completed: "완료",
   error: "오류 발생",
 };
+
+const stageProgressRanges: Record<string, { start: number; end: number }> = {
+  idle: { start: 0, end: 0 },
+  starting: { start: 0, end: 3 },
+  loading_model: { start: 3, end: 15 },
+  preparing_chunks: { start: 15, end: 30 },
+  extracting_embeddings: { start: 30, end: 70 },
+  computing_recurrence: { start: 70, end: 76 },
+  enhancing_paths: { start: 76, end: 82 },
+  finding_patterns: { start: 82, end: 88 },
+  detecting_beats: { start: 88, end: 92 },
+  checking_structure_model: { start: 92, end: 93 },
+  downloading_structure_model: { start: 93, end: 95 },
+  loading_structure_model: { start: 95, end: 96 },
+  analyzing_structure: { start: 96, end: 98 },
+  structure_complete: { start: 98, end: 98 },
+  refining_seam: { start: 98, end: 99 },
+  completed: { start: 100, end: 100 },
+  error: { start: 0, end: 0 },
+};
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(value, 0), 1);
+}
+
+function calculateOverallProgressPercent(progress: ProgressResponse): number {
+  const range = stageProgressRanges[progress.stage];
+  const ratio =
+    progress.total > 0 ? clamp01(progress.current / progress.total) : 0;
+
+  if (!range) {
+    return Math.round(ratio * 100);
+  }
+
+  if (range.start === range.end) {
+    return range.start;
+  }
+
+  return Math.round(range.start + (range.end - range.start) * ratio);
+}
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) {
@@ -73,15 +116,13 @@ function formatTimeMs(seconds: number): string {
 }
 
 function formatSamples(samples: number, sampleRate: number): string {
-  if (!Number.isFinite(samples) || !Number.isFinite(sampleRate) || sampleRate <= 0) return "0:00.000";
+  if (
+    !Number.isFinite(samples) ||
+    !Number.isFinite(sampleRate) ||
+    sampleRate <= 0
+  )
+    return "0:00.000";
   return formatTimeMs(samples / sampleRate);
-}
-
-// Global handler for file drop from PyWebView
-declare global {
-  interface Window {
-    onFileDropped?: ((filePath: string, filename: string) => void) | undefined;
-  }
 }
 
 export default function Home() {
@@ -89,7 +130,9 @@ export default function Home() {
   const [statusMessage, setStatusMessage] = useState("파일을 선택하세요");
   const [filename, setFilename] = useState<string | null>(null);
   const [audioDataUrl, setAudioDataUrl] = useState<string | null>(null);
-  const [analysisResult, setAnalysisResult] = useState<AnalyzeResponse | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<AnalyzeResponse | null>(
+    null
+  );
   const [selectedLoop, setSelectedLoop] = useState<LoopPoint | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLooping, setIsLooping] = useState(true);
@@ -103,15 +146,58 @@ export default function Home() {
     total: 0,
     stage: "idle",
   });
+  const [overallProgressPercent, setOverallProgressPercent] = useState(0);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
-  const analyzeFileRef = useRef<((path: string, name: string) => void) | null>(null);
-  // Store current file path for re-analysis
+  const analyzeFileRef = useRef<((path: string, name: string) => void) | null>(
+    null
+  );
   const currentFilePathRef = useRef<string | null>(null);
+
+  // Tauri is always ready (no PyWebView polling needed)
+  useEffect(() => {
+    setIsReady(true);
+  }, []);
+
+  // Setup Tauri drag-drop handler
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+
+    async function setupDragDrop() {
+      try {
+        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+        const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+          if (event.payload.type === "drop") {
+            const paths = event.payload.paths;
+            if (paths.length > 0) {
+              const filePath = paths[0]!;
+              const ext = filePath.split(".").pop()?.toLowerCase();
+              if (
+                ext &&
+                ["mp3", "wav", "flac", "ogg", "m4a"].includes(ext)
+              ) {
+                const fileName =
+                  filePath.split("/").pop() ??
+                  filePath.split("\\").pop() ??
+                  filePath;
+                analyzeFileRef.current?.(filePath, fileName);
+              }
+            }
+          }
+        });
+        cleanup = unlisten;
+      } catch {
+        // Not in Tauri environment (dev browser)
+      }
+    }
+
+    setupDragDrop();
+    return () => cleanup?.();
+  }, []);
 
   const displayLoops = useMemo(() => {
     const loops = analysisResult?.loops ? [...analysisResult.loops] : [];
-    const sr = analysisResult?.sample_rate ?? 0;
-    const length = (loop: LoopPoint) => Math.abs(loop.end_sample - loop.start_sample);
+    const length = (loop: LoopPoint) =>
+      Math.abs(loop.end_sample - loop.start_sample);
 
     loops.sort((a, b) => {
       if (sortMode === "length_desc") {
@@ -127,7 +213,7 @@ export default function Home() {
       // score_desc
       const d = (b.score ?? 0) - (a.score ?? 0);
       if (d !== 0) return d;
-      // Tie-breaker: prefer longer loop slightly
+      const sr = analysisResult?.sample_rate ?? 0;
       if (sr > 0) {
         const ld = length(b) - length(a);
         if (ld !== 0) return ld;
@@ -138,94 +224,82 @@ export default function Home() {
     return loops;
   }, [analysisResult, sortMode]);
 
-  // Wait for PyWebView to be ready and setup drop handler
-  useEffect(() => {
-    let attempts = 0;
-    const maxAttempts = 30; // 3 seconds max wait
-
-    const checkPyWebView = () => {
-      if (window.pywebview) {
-        setIsReady(true);
-      } else if (attempts < maxAttempts) {
-        attempts++;
-        setTimeout(checkPyWebView, 100);
-      } else {
-        // Timeout: allow UI to render for development/testing
-        // (API calls will still fail without pywebview)
-        console.warn("PyWebView not detected. Running in browser-only mode.");
-        setIsReady(true);
-      }
-    };
-    checkPyWebView();
-
-    // Setup global drop handler
-    window.onFileDropped = (filePath: string, filename: string) => {
-      if (analyzeFileRef.current) {
-        analyzeFileRef.current(filePath, filename);
-      }
-    };
-
-    return () => {
-      window.onFileDropped = undefined;
-    };
-  }, []);
-
   const handleAnalyzeFile = useCallback(async (filePath: string, name: string) => {
     setStatus("analyzing");
     setStatusMessage("분석 시작...");
     setFilename(name);
+    setAudioDataUrl(null);
+    setAnalysisResult(null);
+    setSelectedLoop(null);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
     setProgress({ current: 0, total: 0, stage: "starting" });
+    setOverallProgressPercent(0);
     currentFilePathRef.current = filePath;
 
+    // Subscribe to push-based progress events
+    let unlistenProgress: (() => void) | undefined;
+    let unlistenComplete: (() => void) | undefined;
+
     try {
-      // Start async analysis (backend auto-detects available enhancements)
-      await analyzeFileAsync(filePath);
+      unlistenProgress = await onProgress((prog) => {
+        setProgress(prog);
+        setStatusMessage(stageMessages[prog.stage] || prog.stage);
+        setOverallProgressPercent((prev) => {
+          const next = calculateOverallProgressPercent(prog);
+          return Math.max(prev, next);
+        });
 
-      // Poll for progress
-      const pollProgress = async () => {
-        try {
-          const prog = await getProgress();
-          setProgress(prog);
-          setStatusMessage(stageMessages[prog.stage] || prog.stage);
-
-          if (prog.stage === "completed") {
-            // Get the result
-            const analysis = await getAnalysisResult();
-            if (analysis) {
-              setAnalysisResult(analysis);
-
-              const base64 = await getAudioBase64();
-              if (base64) {
-                setAudioDataUrl(`data:audio/wav;base64,${base64}`);
-              }
-
-              const firstLoop = analysis.loops[0];
-              if (firstLoop) {
-                setSelectedLoop(firstLoop);
-                setStatusMessage(`${analysis.loops.length}개의 루프 포인트 발견`);
-              } else {
-                setStatusMessage("루프 포인트를 찾을 수 없습니다");
-              }
-              setStatus("ready");
-            }
-          } else if (prog.stage === "error") {
-            setStatus("error");
-            setStatusMessage(prog.error || "오류가 발생했습니다");
-          } else {
-            // Continue polling
-            setTimeout(pollProgress, 500);
-          }
-        } catch (error) {
+        if (prog.stage === "error") {
           setStatus("error");
-          setStatusMessage(error instanceof Error ? error.message : "오류가 발생했습니다");
+          setStatusMessage(prog.error || "오류가 발생했습니다");
         }
-      };
+      });
 
-      // Start polling
-      setTimeout(pollProgress, 200);
+      // invoke analyze (blocks until sidecar completes)
+      const analysis = await analyzeFile(filePath);
+
+      // Cleanup progress listener
+      unlistenProgress?.();
+      unlistenProgress = undefined;
+
+      setAnalysisResult(analysis);
+      setOverallProgressPercent(100);
+
+      // Load audio via temp file + convertFileSrc
+      let audioLoaded = false;
+      try {
+        const audioUrl = await getAudioUrl();
+        if (audioUrl) {
+          setAudioDataUrl(audioUrl);
+          audioLoaded = true;
+        }
+      } catch (err) {
+        console.error("Failed to load audio:", err);
+        setAudioDataUrl(null);
+      }
+
+      const firstLoop = analysis.loops[0];
+      if (firstLoop) {
+        setSelectedLoop(firstLoop);
+        setStatusMessage(
+          `${analysis.loops.length}개의 루프 포인트 발견${audioLoaded ? "" : " (오디오 로딩 실패)"}`
+        );
+      } else {
+        setStatusMessage(
+          `루프 포인트를 찾을 수 없습니다${audioLoaded ? "" : " (오디오 로딩 실패)"}`
+        );
+      }
+      setStatus("ready");
     } catch (error) {
       setStatus("error");
-      setStatusMessage(error instanceof Error ? error.message : "오류가 발생했습니다");
+      setStatusMessage(
+        error instanceof Error ? error.message : "오류가 발생했습니다"
+      );
+    } finally {
+      unlistenProgress?.();
+      unlistenComplete?.();
     }
   }, []);
 
@@ -234,31 +308,88 @@ export default function Home() {
     analyzeFileRef.current = handleAnalyzeFile;
   }, [handleAnalyzeFile]);
 
-  const handleLoopChange = useCallback((nextStartSample: number, nextEndSample: number) => {
-    if (!analysisResult || !selectedLoop) return;
-    const sr = analysisResult.sample_rate;
-
-    const start = Math.max(0, Math.min(nextStartSample, nextEndSample));
-    const end = Math.max(start, Math.max(nextStartSample, nextEndSample));
-
-    const updated: LoopPoint = {
-      ...selectedLoop,
-      start_sample: start,
-      end_sample: end,
-      start_time: formatSamples(start, sr),
-      end_time: formatSamples(end, sr),
-      duration: formatSamples(end - start, sr),
+  // Compatibility bridge for legacy PyWebView drop integration.
+  // backend/app.py may call window.onFileDropped(...) before React hydrates.
+  useEffect(() => {
+    const legacyWindow = window as Window & {
+      onFileDropped?: (filePath: string, filename: string) => void;
+      __musicLooperPendingDrops?: Array<{ path?: string; filename?: string }>;
     };
 
-    setSelectedLoop(updated);
-    setAnalysisResult((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        loops: prev.loops.map((loop) => (loop.index === updated.index ? updated : loop)),
+    const isSupportedAudio = (filePath: string) => {
+      const ext = filePath.split(".").pop()?.toLowerCase();
+      return Boolean(ext && ["mp3", "wav", "flac", "ogg", "m4a"].includes(ext));
+    };
+
+    const processDroppedFile = (filePath: string, filename?: string) => {
+      if (!filePath || !isSupportedAudio(filePath)) return;
+      const resolvedName =
+        filename ||
+        filePath.split("/").pop() ||
+        filePath.split("\\").pop() ||
+        filePath;
+      handleAnalyzeFile(filePath, resolvedName);
+    };
+
+    const onLegacyDropped = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{ path?: string; filename?: string }>
+      ).detail;
+      processDroppedFile(detail?.path ?? "", detail?.filename);
+    };
+
+    legacyWindow.onFileDropped = processDroppedFile;
+    window.addEventListener("music-looper-file-drop", onLegacyDropped);
+
+    const pendingDrops = Array.isArray(legacyWindow.__musicLooperPendingDrops)
+      ? [...legacyWindow.__musicLooperPendingDrops]
+      : [];
+    legacyWindow.__musicLooperPendingDrops = [];
+    for (const dropped of pendingDrops) {
+      processDroppedFile(dropped?.path ?? "", dropped?.filename);
+    }
+
+    return () => {
+      if (legacyWindow.onFileDropped === processDroppedFile) {
+        delete legacyWindow.onFileDropped;
+      }
+      window.removeEventListener("music-looper-file-drop", onLegacyDropped);
+    };
+  }, [handleAnalyzeFile]);
+
+  const handleLoopChange = useCallback(
+    (nextStartSample: number, nextEndSample: number) => {
+      if (!analysisResult || !selectedLoop) return;
+      const sr = analysisResult.sample_rate;
+
+      const start = Math.max(0, Math.min(nextStartSample, nextEndSample));
+      const end = Math.max(
+        start,
+        Math.max(nextStartSample, nextEndSample)
+      );
+
+      const updated: LoopPoint = {
+        ...selectedLoop,
+        start_sample: start,
+        end_sample: end,
+        start_time: formatSamples(start, sr),
+        end_time: formatSamples(end, sr),
+        duration: formatSamples(end - start, sr),
       };
-    });
-  }, [analysisResult, selectedLoop]);
+
+      setSelectedLoop(updated);
+      setAnalysisResult((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          loops: prev.loops.map((loop) =>
+            loop.index === updated.index ? updated : loop
+          ),
+        };
+      });
+    },
+    [analysisResult, selectedLoop]
+  );
 
   const handleSelectFile = useCallback(async () => {
     setStatus("selecting");
@@ -275,29 +406,35 @@ export default function Home() {
       await handleAnalyzeFile(result.path, result.filename);
     } catch (error) {
       setStatus("error");
-      setStatusMessage(error instanceof Error ? error.message : "오류가 발생했습니다");
+      setStatusMessage(
+        error instanceof Error ? error.message : "오류가 발생했습니다"
+      );
     }
   }, [handleAnalyzeFile]);
 
-  const handleLoopSelect = useCallback(async (loop: LoopPoint) => {
-    setSelectedLoop(loop);
+  const handleLoopSelect = useCallback(
+    async (loop: LoopPoint) => {
+      setSelectedLoop(loop);
 
-    // Auto-play from 3 seconds before loop end to hear the transition
-    if (wavesurferRef.current && analysisResult) {
-      const sampleRate = analysisResult.sample_rate;
-      const loopStartTime = Math.min(loop.start_sample, loop.end_sample) / sampleRate;
-      const loopEndTime = Math.max(loop.start_sample, loop.end_sample) / sampleRate;
+      if (wavesurferRef.current && analysisResult) {
+        const sampleRate = analysisResult.sample_rate;
+        const loopStartTime =
+          Math.min(loop.start_sample, loop.end_sample) / sampleRate;
+        const loopEndTime =
+          Math.max(loop.start_sample, loop.end_sample) / sampleRate;
 
-      const media = wavesurferRef.current.getMediaElement() as unknown as LoopingMedia;
-      media.setLoopPoints?.(loopStartTime, loopEndTime);
-      media.setLooping?.(isLooping);
+        const media = wavesurferRef.current.getMediaElement() as unknown as LoopingMedia;
+        media.setLoopPoints?.(loopStartTime, loopEndTime);
+        media.setLooping?.(isLooping);
 
-      const previewStart = Math.max(0, loopEndTime - 3);
-      wavesurferRef.current.setTime(previewStart);
-      wavesurferRef.current.play();
-      setIsPlaying(true);
-    }
-  }, [analysisResult, isLooping]);
+        const previewStart = Math.max(0, loopEndTime - 3);
+        wavesurferRef.current.setTime(previewStart);
+        wavesurferRef.current.play();
+        setIsPlaying(true);
+      }
+    },
+    [analysisResult, isLooping]
+  );
 
   const handlePlayPause = useCallback(async () => {
     if (!wavesurferRef.current || !selectedLoop || !analysisResult) return;
@@ -308,8 +445,12 @@ export default function Home() {
       wavesurferRef.current.pause();
       setIsPlaying(false);
     } else {
-      const startTime = Math.min(selectedLoop.start_sample, selectedLoop.end_sample) / sampleRate;
-      const endTime = Math.max(selectedLoop.start_sample, selectedLoop.end_sample) / sampleRate;
+      const startTime =
+        Math.min(selectedLoop.start_sample, selectedLoop.end_sample) /
+        sampleRate;
+      const endTime =
+        Math.max(selectedLoop.start_sample, selectedLoop.end_sample) /
+        sampleRate;
 
       const media = wavesurferRef.current.getMediaElement() as unknown as LoopingMedia;
       media.setLoopPoints?.(startTime, endTime);
@@ -329,8 +470,12 @@ export default function Home() {
     }
     if (selectedLoop && analysisResult && wavesurferRef.current) {
       const sampleRate = analysisResult.sample_rate;
-      const startTime = Math.min(selectedLoop.start_sample, selectedLoop.end_sample) / sampleRate;
-      const endTime = Math.max(selectedLoop.start_sample, selectedLoop.end_sample) / sampleRate;
+      const startTime =
+        Math.min(selectedLoop.start_sample, selectedLoop.end_sample) /
+        sampleRate;
+      const endTime =
+        Math.max(selectedLoop.start_sample, selectedLoop.end_sample) /
+        sampleRate;
 
       const media = wavesurferRef.current.getMediaElement() as unknown as LoopingMedia;
       media.setLoopPoints?.(startTime, endTime);
@@ -359,13 +504,14 @@ export default function Home() {
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
+    setProgress({ current: 0, total: 0, stage: "idle" });
+    setOverallProgressPercent(0);
     currentFilePathRef.current = null;
   }, []);
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore shortcuts when typing in input fields
       if (
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement
@@ -373,18 +519,17 @@ export default function Home() {
         return;
       }
 
-      // Only enable shortcuts when audio is ready
       if (status !== "ready") return;
 
       switch (e.key.toLowerCase()) {
-        case " ": // Space - Play/Pause
+        case " ":
           e.preventDefault();
           handlePlayPause();
           break;
-        case "l": // L - Toggle loop
+        case "l":
           setIsLooping((prev) => !prev);
           break;
-        case "e": // E - Open export menu
+        case "e":
           setIsExportMenuOpen(true);
           break;
         case "1":
@@ -396,7 +541,6 @@ export default function Home() {
         case "7":
         case "8":
         case "9": {
-          // 1-9 - Select loop by index
           const index = parseInt(e.key, 10) - 1;
           const loop = displayLoops[index];
           if (loop) {
@@ -439,7 +583,9 @@ export default function Home() {
               onClick={handleSelectFile}
             >
               <FolderOpen className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
-              <p className="text-lg font-medium mb-2">파일을 끌어다 놓거나 클릭하세요</p>
+              <p className="text-lg font-medium mb-2">
+                파일을 끌어다 놓거나 클릭하세요
+              </p>
               <p className="text-sm text-muted-foreground">
                 지원 형식: MP3, WAV, FLAC, OGG, M4A
               </p>
@@ -450,12 +596,23 @@ export default function Home() {
             <div className="flex flex-col items-center justify-center py-16 gap-6">
               <Loader2 className="h-12 w-12 animate-spin text-primary" />
               <div className="w-full max-w-md space-y-2">
-                <p className="text-lg text-muted-foreground text-center">{statusMessage}</p>
-                {status === "analyzing" && progress.total > 0 && (
+                <p className="text-lg text-muted-foreground text-center">
+                  {statusMessage}
+                </p>
+                {status === "analyzing" && (
                   <div className="space-y-1">
-                    <Progress value={progress.current} max={progress.total} className="h-2" />
+                    <Progress
+                      value={overallProgressPercent}
+                      max={100}
+                      className="h-2"
+                    />
+                    <p className="text-xs font-medium text-center">
+                      {overallProgressPercent}%
+                    </p>
                     <p className="text-xs text-muted-foreground text-center">
-                      {progress.current} / {progress.total}
+                      {progress.total > 0
+                        ? `단계 진행: ${progress.current} / ${progress.total}`
+                        : "단계 진행: 준비 중"}
                     </p>
                   </div>
                 )}
@@ -468,12 +625,22 @@ export default function Home() {
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="text-lg font-semibold">{filename}</h2>
-                  <p className="text-sm text-muted-foreground">{statusMessage}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {statusMessage}
+                  </p>
                   {analysisResult?.enhancements && (
                     <div className="mt-2 flex flex-wrap gap-2">
                       <Badge
-                        variant={analysisResult.enhancements.beat_alignment.effective ? "secondary" : "outline"}
-                        className={!analysisResult.enhancements.beat_alignment.enabled ? "opacity-60" : ""}
+                        variant={
+                          analysisResult.enhancements.beat_alignment.effective
+                            ? "secondary"
+                            : "outline"
+                        }
+                        className={
+                          !analysisResult.enhancements.beat_alignment.enabled
+                            ? "opacity-60"
+                            : ""
+                        }
                         title="madmom 기반 비트/마디 정렬"
                       >
                         비트정렬:{" "}
@@ -484,8 +651,16 @@ export default function Home() {
                           : "OFF"}
                       </Badge>
                       <Badge
-                        variant={analysisResult.enhancements.structure.effective ? "secondary" : "outline"}
-                        className={!analysisResult.enhancements.structure.enabled ? "opacity-60" : ""}
+                        variant={
+                          analysisResult.enhancements.structure.effective
+                            ? "secondary"
+                            : "outline"
+                        }
+                        className={
+                          !analysisResult.enhancements.structure.enabled
+                            ? "opacity-60"
+                            : ""
+                        }
                         title="allin1 기반 구조(섹션) 분석 보정"
                       >
                         구조분석:{" "}
@@ -527,12 +702,17 @@ export default function Home() {
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-muted-foreground">정렬</span>
-                    <Select value={sortMode} onValueChange={(v) => setSortMode(v as SortMode)}>
+                    <Select
+                      value={sortMode}
+                      onValueChange={(v) => setSortMode(v as SortMode)}
+                    >
                       <SelectTrigger className="w-[180px]">
                         <SelectValue placeholder="정렬 선택" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="score_desc">정확도(점수) ↓</SelectItem>
+                        <SelectItem value="score_desc">
+                          정확도(점수) ↓
+                        </SelectItem>
                         <SelectItem value="length_desc">길이 ↓</SelectItem>
                         <SelectItem value="length_asc">길이 ↑</SelectItem>
                       </SelectContent>
