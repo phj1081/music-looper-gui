@@ -1,4 +1,6 @@
 use serde_json::Value;
+use std::env;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::AppHandle;
 use tauri::Manager;
@@ -20,12 +22,51 @@ impl Default for ServerState {
     }
 }
 
+fn build_sidecar_path_env() -> Option<String> {
+    fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        if !paths.iter().any(|candidate| candidate == &path) {
+            paths.push(path);
+        }
+    }
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+
+    if let Some(existing_path) = env::var_os("PATH") {
+        for path in env::split_paths(&existing_path) {
+            push_unique(&mut paths, path);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    for candidate in [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ] {
+        push_unique(&mut paths, PathBuf::from(candidate));
+    }
+
+    env::join_paths(paths)
+        .ok()
+        .map(|value| value.to_string_lossy().into_owned())
+}
+
 /// Spawn the Python sidecar and read the port it prints to stdout.
 pub async fn spawn_server(app: &AppHandle) -> Result<(), String> {
-    let sidecar_command = app
+    let mut sidecar_command = app
         .shell()
         .sidecar("music-looper-sidecar")
         .map_err(|e| format!("Failed to create sidecar command: {}", e))?;
+
+    if let Some(path_env) = build_sidecar_path_env() {
+        sidecar_command = sidecar_command.env("PATH", path_env);
+    }
 
     let (mut rx, _child) = sidecar_command
         .spawn()
