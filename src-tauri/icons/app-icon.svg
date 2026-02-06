@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f0c29"/>
+      <stop offset="50%" stop-color="#302b63"/>
+      <stop offset="100%" stop-color="#24243e"/>
+    </linearGradient>
+    <linearGradient id="loopGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00d2ff"/>
+      <stop offset="50%" stop-color="#a855f7"/>
+      <stop offset="100%" stop-color="#ff6fd8"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="14" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="outerGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="28" result="blur"/>
+    </filter>
+  </defs>
+
+  <!-- Background full square (macOS will round it) -->
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Background waveform bars (subtle) -->
+  <g opacity="0.10">
+    <rect x="80" y="380" width="22" height="264" rx="11" fill="#00d2ff"/>
+    <rect x="130" y="300" width="22" height="424" rx="11" fill="#00d2ff"/>
+    <rect x="180" y="340" width="22" height="344" rx="11" fill="#00d2ff"/>
+    <rect x="230" y="260" width="22" height="504" rx="11" fill="#00d2ff"/>
+    <rect x="280" y="320" width="22" height="384" rx="11" fill="#00d2ff"/>
+    <rect x="330" y="230" width="22" height="564" rx="11" fill="#a855f7"/>
+    <rect x="380" y="290" width="22" height="444" rx="11" fill="#a855f7"/>
+    <rect x="430" y="200" width="22" height="624" rx="11" fill="#a855f7"/>
+    <rect x="480" y="260" width="22" height="504" rx="11" fill="#a855f7"/>
+    <rect x="530" y="210" width="22" height="604" rx="11" fill="#a855f7"/>
+    <rect x="580" y="270" width="22" height="484" rx="11" fill="#ff6fd8"/>
+    <rect x="630" y="230" width="22" height="564" rx="11" fill="#ff6fd8"/>
+    <rect x="680" y="310" width="22" height="404" rx="11" fill="#ff6fd8"/>
+    <rect x="730" y="260" width="22" height="504" rx="11" fill="#ff6fd8"/>
+    <rect x="780" y="320" width="22" height="384" rx="11" fill="#ff6fd8"/>
+    <rect x="830" y="290" width="22" height="444" rx="11" fill="#ff6fd8"/>
+    <rect x="880" y="350" width="22" height="324" rx="11" fill="#ff6fd8"/>
+    <rect x="930" y="390" width="22" height="244" rx="11" fill="#ff6fd8"/>
+  </g>
+
+  <!-- Glow behind the infinity loop -->
+  <path d="M 200 512 C 200 320, 430 290, 512 420 C 594 290, 824 320, 824 512 C 824 704, 594 734, 512 604 C 430 734, 200 704, 200 512 Z"
+        fill="none" stroke="url(#loopGrad)" stroke-width="68" stroke-linecap="round"
+        filter="url(#outerGlow)" opacity="0.5"/>
+
+  <!-- Main infinity loop -->
+  <path d="M 200 512 C 200 320, 430 290, 512 420 C 594 290, 824 320, 824 512 C 824 704, 594 734, 512 604 C 430 734, 200 704, 200 512 Z"
+        fill="none" stroke="url(#loopGrad)" stroke-width="56" stroke-linecap="round"
+        filter="url(#glow)"/>
+
+  <!-- Play triangle in center -->
+  <polygon points="490,478 490,546 542,512" fill="white" opacity="0.9"/>
+</svg>
