@@ -17,10 +17,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# PyWebView is only needed for the legacy app.py mode (non-Tauri)
-legacy-gui = [
-    "pywebview>=5.0.0",
-]
 # Beat alignment requires madmom (may have numpy compatibility issues)
 beat = [
     "madmom>=0.16.1",
@@ -43,9 +39,6 @@ all = [
     "natten==0.17.5; platform_system == 'Darwin'",
 ]
 
-[project.scripts]
-music-looper = "app:main"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -55,4 +48,4 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
-only-include = ["app.py", "core.py", "server.py", "http_server.py", "deep_analyzer.py", "allin1_enhancer.py"]
+only-include = ["core.py", "http_server.py", "deep_analyzer.py", "allin1_enhancer.py"]
