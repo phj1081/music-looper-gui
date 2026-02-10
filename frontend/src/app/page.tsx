@@ -20,12 +20,10 @@ import {
   selectFile,
   analyzeFile,
   getAudioUrl,
-  getRuntimeDiagnostics,
   onProgress,
   type LoopPoint,
   type AnalyzeResponse,
   type ProgressResponse,
-  type RuntimeDiagnostics,
 } from "@/lib/api";
 import { ExportMenu } from "@/components/export-menu";
 import { Progress } from "@/components/ui/progress";
@@ -127,32 +125,6 @@ function formatSamples(samples: number, sampleRate: number): string {
   return formatTimeMs(samples / sampleRate);
 }
 
-function summarizePath(pathValue: string, maxLength = 120): string {
-  if (!pathValue) return "N/A";
-  if (pathValue.length <= maxLength) return pathValue;
-  return `${pathValue.slice(0, maxLength)}...`;
-}
-
-function getBeatAlignmentDiagnosticMessage(
-  analysis: AnalyzeResponse | null,
-  runtime: RuntimeDiagnostics | null
-): string | null {
-  const beat = analysis?.enhancements?.beat_alignment;
-  if (!beat?.enabled || beat.effective) return null;
-
-  const server = runtime?.server;
-  if (!server) {
-    return "비트정렬 미적용 원인을 확인하기 위해 런타임 진단 정보를 불러오지 못했습니다.";
-  }
-  if (!server.madmom_available) {
-    return "madmom을 사용할 수 없어 비트정렬이 미적용되었습니다.";
-  }
-  if (!server.ffmpeg_path) {
-    return "ffmpeg를 찾지 못해 비트정렬이 미적용되었습니다.";
-  }
-  return "madmom/ffmpeg는 정상이며 이 파일에서 유효한 다운비트를 찾지 못해 비트정렬이 미적용되었습니다.";
-}
-
 export default function Home() {
   const [status, setStatus] = useState<Status>("idle");
   const [statusMessage, setStatusMessage] = useState("파일을 선택하세요");
@@ -175,8 +147,6 @@ export default function Home() {
     stage: "idle",
   });
   const [overallProgressPercent, setOverallProgressPercent] = useState(0);
-  const [runtimeDiagnostics, setRuntimeDiagnostics] =
-    useState<RuntimeDiagnostics | null>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const analyzeFileRef = useRef<((path: string, name: string) => void) | null>(
     null
@@ -254,16 +224,6 @@ export default function Home() {
     return loops;
   }, [analysisResult, sortMode]);
 
-  const beatAlignmentDiagnostic = useMemo(
-    () => getBeatAlignmentDiagnosticMessage(analysisResult, runtimeDiagnostics),
-    [analysisResult, runtimeDiagnostics]
-  );
-
-  const runtimePathSummary = useMemo(
-    () => summarizePath(runtimeDiagnostics?.server?.path ?? ""),
-    [runtimeDiagnostics]
-  );
-
   const handleAnalyzeFile = useCallback(async (filePath: string, name: string) => {
     setStatus("analyzing");
     setStatusMessage("분석 시작...");
@@ -276,7 +236,6 @@ export default function Home() {
     setDuration(0);
     setProgress({ current: 0, total: 0, stage: "starting" });
     setOverallProgressPercent(0);
-    setRuntimeDiagnostics(null);
     currentFilePathRef.current = filePath;
 
     // Subscribe to push-based progress events
@@ -284,8 +243,6 @@ export default function Home() {
     let unlistenComplete: (() => void) | undefined;
 
     try {
-      const diagnosticsPromise = getRuntimeDiagnostics().catch(() => null);
-
       unlistenProgress = await onProgress((prog) => {
         setProgress(prog);
         setStatusMessage(stageMessages[prog.stage] || prog.stage);
@@ -306,11 +263,6 @@ export default function Home() {
       // Cleanup progress listener
       unlistenProgress?.();
       unlistenProgress = undefined;
-
-      const diagnostics = await diagnosticsPromise;
-      if (diagnostics) {
-        setRuntimeDiagnostics(diagnostics);
-      }
 
       setAnalysisResult(analysis);
       setOverallProgressPercent(100);
@@ -554,7 +506,6 @@ export default function Home() {
     setDuration(0);
     setProgress({ current: 0, total: 0, stage: "idle" });
     setOverallProgressPercent(0);
-    setRuntimeDiagnostics(null);
     currentFilePathRef.current = null;
   }, []);
 
@@ -692,86 +643,47 @@ export default function Home() {
                     {statusMessage}
                   </p>
                   {analysisResult.enhancements && (
-                    <div className="mt-2 space-y-2">
-                      <div className="flex flex-wrap gap-2">
-                        <Badge
-                          variant={
-                            analysisResult.enhancements.beat_alignment.effective
-                              ? "secondary"
-                              : "outline"
-                          }
-                          className={
-                            !analysisResult.enhancements.beat_alignment.enabled
-                              ? "opacity-60"
-                              : ""
-                          }
-                          title="madmom 기반 비트/마디 정렬"
-                        >
-                          비트정렬:{" "}
-                          {analysisResult.enhancements.beat_alignment.enabled
-                            ? analysisResult.enhancements.beat_alignment.effective
-                              ? "ON"
-                              : "ON(미적용)"
-                            : "OFF"}
-                        </Badge>
-                        <Badge
-                          variant={
-                            analysisResult.enhancements.structure.effective
-                              ? "secondary"
-                              : "outline"
-                          }
-                          className={
-                            !analysisResult.enhancements.structure.enabled
-                              ? "opacity-60"
-                              : ""
-                          }
-                          title="allin1 기반 구조(섹션) 분석 보정"
-                        >
-                          구조분석:{" "}
-                          {analysisResult.enhancements.structure.enabled
-                            ? analysisResult.enhancements.structure.effective
-                              ? "ON"
-                              : "ON(미적용)"
-                            : "OFF"}
-                        </Badge>
-                      </div>
-                      {beatAlignmentDiagnostic && (
-                        <p className="text-xs text-amber-700">
-                          {beatAlignmentDiagnostic}
-                        </p>
-                      )}
-                      {runtimeDiagnostics && (
-                        <div className="rounded-md border bg-muted/30 p-2 text-xs">
-                          <p className="font-medium text-foreground">진단 정보</p>
-                          <p className="mt-1 font-mono text-muted-foreground">
-                            App: v{runtimeDiagnostics.app?.appVersion ?? "?"} (
-                            {runtimeDiagnostics.app?.appBuildId ?? "unknown"})
-                          </p>
-                          <p className="font-mono text-muted-foreground">
-                            Sidecar PID: {runtimeDiagnostics.server?.pid ?? "N/A"}
-                          </p>
-                          <p className="font-mono text-muted-foreground">
-                            ffmpeg:{" "}
-                            {runtimeDiagnostics.server?.ffmpeg_path ?? "NOT FOUND"}
-                          </p>
-                          <p className="font-mono text-muted-foreground">
-                            madmom/allin1:{" "}
-                            {runtimeDiagnostics.server?.madmom_available
-                              ? "Y"
-                              : "N"}
-                            /
-                            {runtimeDiagnostics.server?.allin1_available
-                              ? "Y"
-                              : "N"}
-                          </p>
-                          <p
-                            className="font-mono text-muted-foreground"
-                            title={runtimeDiagnostics.server?.path ?? "N/A"}
-                          >
-                            PATH: {runtimePathSummary}
-                          </p>
-                        </div>
-                      )}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Badge
+                        variant={
+                          analysisResult.enhancements.beat_alignment.effective
+                            ? "secondary"
+                            : "outline"
+                        }
+                        className={
+                          !analysisResult.enhancements.beat_alignment.enabled
+                            ? "opacity-60"
+                            : ""
+                        }
+                        title="madmom 기반 비트/마디 정렬"
+                      >
+                        비트정렬:{" "}
+                        {analysisResult.enhancements.beat_alignment.enabled
+                          ? analysisResult.enhancements.beat_alignment.effective
+                            ? "ON"
+                            : "ON(미적용)"
+                          : "OFF"}
+                      </Badge>
+                      <Badge
+                        variant={
+                          analysisResult.enhancements.structure.effective
+                            ? "secondary"
+                            : "outline"
+                        }
+                        className={
+                          !analysisResult.enhancements.structure.enabled
+                            ? "opacity-60"
+                            : ""
+                        }
+                        title="allin1 기반 구조(섹션) 분석 보정"
+                      >
+                        구조분석:{" "}
+                        {analysisResult.enhancements.structure.enabled
+                          ? analysisResult.enhancements.structure.effective
+                            ? "ON"
+                            : "ON(미적용)"
+                          : "OFF"}
+                      </Badge>
                     </div>
                   )}
                 </div>

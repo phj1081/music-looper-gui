@@ -46,29 +46,6 @@ export interface AnalyzeResponse {
   loops: LoopPoint[];
 }
 
-export interface AppRuntimeInfo {
-  appVersion: string;
-  appBuildId: string;
-  appBinaryPath: string;
-  sidecarBinaryPath: string;
-}
-
-export interface ServerRuntimeInfo {
-  python_executable: string;
-  pid: number;
-  cwd: string;
-  frozen: boolean;
-  path: string;
-  ffmpeg_path: string | null;
-  madmom_available: boolean;
-  allin1_available: boolean;
-}
-
-export interface RuntimeDiagnostics {
-  app: AppRuntimeInfo | null;
-  server: ServerRuntimeInfo | null;
-}
-
 interface AnalyzeResult {
   success: boolean;
   error?: string;
@@ -93,66 +70,6 @@ async function getBaseUrl(): Promise<string> {
     serverPort = port;
   }
   return `http://127.0.0.1:${serverPort}`;
-}
-
-function normalizeServerRuntimeInfo(data: unknown): ServerRuntimeInfo | null {
-  if (!data || typeof data !== "object") return null;
-  const value = data as Record<string, unknown>;
-
-  if (
-    typeof value.python_executable !== "string" ||
-    typeof value.pid !== "number" ||
-    typeof value.cwd !== "string" ||
-    typeof value.frozen !== "boolean" ||
-    typeof value.path !== "string" ||
-    !(
-      value.ffmpeg_path === null ||
-      typeof value.ffmpeg_path === "string"
-    ) ||
-    typeof value.madmom_available !== "boolean" ||
-    typeof value.allin1_available !== "boolean"
-  ) {
-    return null;
-  }
-
-  return {
-    python_executable: value.python_executable,
-    pid: value.pid,
-    cwd: value.cwd,
-    frozen: value.frozen,
-    path: value.path,
-    ffmpeg_path: value.ffmpeg_path,
-    madmom_available: value.madmom_available,
-    allin1_available: value.allin1_available,
-  };
-}
-
-export async function getAppRuntimeInfo(): Promise<AppRuntimeInfo | null> {
-  try {
-    return await invoke<AppRuntimeInfo>("get_runtime_info");
-  } catch {
-    return null;
-  }
-}
-
-export async function getServerRuntimeInfo(): Promise<ServerRuntimeInfo | null> {
-  try {
-    const baseUrl = await getBaseUrl();
-    const response = await fetch(`${baseUrl}/runtime`);
-    if (!response.ok) return null;
-    const data = await response.json();
-    return normalizeServerRuntimeInfo(data);
-  } catch {
-    return null;
-  }
-}
-
-export async function getRuntimeDiagnostics(): Promise<RuntimeDiagnostics> {
-  const [app, server] = await Promise.all([
-    getAppRuntimeInfo(),
-    getServerRuntimeInfo(),
-  ]);
-  return { app, server };
 }
 
 // ── File Selection (Frontend dialog via Tauri plugin) ──────────────
