@@ -215,7 +215,16 @@ async def get_audio():
     path = core.write_audio_to_temp()
     if path is None:
         return JSONResponse(content={"error": "No audio loaded"}, status_code=400)
-    return FileResponse(path, media_type="audio/wav", filename="audio.wav")
+    return FileResponse(
+        path,
+        media_type="audio/wav",
+        filename="audio.wav",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.post("/export/loop")

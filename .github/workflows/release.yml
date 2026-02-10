@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v1.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  # Pin tool versions
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          # Uncomment to enable Intel Mac builds:
+          # - os: macos-13
+          #   target: x86_64-apple-darwin
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---------- Resolve version from tag ----------
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION (tag: $TAG)"
+
+      # ---------- 1. Python sidecar ----------
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+
+      - name: Install Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Sync backend deps
+        working-directory: backend
+        run: |
+          uv sync --all-extras \
+            --no-build-isolation-package madmom \
+            --no-build-isolation-package natten
+
+      - name: Build sidecar with PyInstaller
+        working-directory: backend
+        run: |
+          uv run --all-extras --with pyinstaller \
+            pyinstaller MusicLooperSidecar.spec --noconfirm
+
+      - name: Copy sidecar to Tauri binaries
+        run: |
+          SIDECAR_SRC="backend/dist/music-looper-sidecar"
+          SIDECAR_DST="src-tauri/binaries/music-looper-sidecar-${{ matrix.target }}"
+
+          rm -rf "${SIDECAR_DST}"
+
+          if [ -d "${SIDECAR_SRC}" ]; then
+            cp -r "${SIDECAR_SRC}" "${SIDECAR_DST}"
+          elif [ -f "${SIDECAR_SRC}" ]; then
+            cp "${SIDECAR_SRC}" "${SIDECAR_DST}"
+          else
+            echo "ERROR: Sidecar binary not found at ${SIDECAR_SRC}"
+            exit 1
+          fi
+
+          echo "Sidecar copied to: ${SIDECAR_DST}"
+
+      # ---------- 2. Frontend + Rust ----------
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        run: pnpm -C frontend install --frozen-lockfile
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # ---------- 3. Tauri build + release ----------
+      - name: Build Tauri app and create release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Uncomment and set these secrets for code signing:
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ steps.version.outputs.tag }}
+          releaseName: "Music Looper ${{ steps.version.outputs.tag }}"
+          releaseBody: |
+            See the assets below to download the installer for your platform.
+          releaseDraft: true
+          prerelease: false
+          tauriScript: ./frontend/node_modules/.bin/tauri
+          args: --target ${{ matrix.target }}

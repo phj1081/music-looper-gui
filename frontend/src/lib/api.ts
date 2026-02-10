@@ -159,8 +159,8 @@ export function onProgress(
 
 export async function getAudioUrl(): Promise<string | null> {
   const baseUrl = await getBaseUrl();
-  // Return the URL directly — the browser/wavesurfer can fetch it.
-  return `${baseUrl}/audio`;
+  // Add a cache buster so file switches always load fresh audio.
+  return `${baseUrl}/audio?v=${Date.now().toString()}`;
 }
 
 // ── Waveform ───────────────────────────────────────────────────────
