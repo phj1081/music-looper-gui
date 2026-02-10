@@ -22,7 +22,10 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::get_server_port])
+        .invoke_handler(tauri::generate_handler![
+            commands::get_server_port,
+            commands::get_runtime_info
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

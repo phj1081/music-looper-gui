@@ -14,9 +14,11 @@ import asyncio
 import json
 import os
 import runpy
+import shutil
 import sys
 import traceback
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from typing import AsyncGenerator
 
 # ── PyInstaller child-process handler (must run before any imports) ──
@@ -86,6 +88,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from allin1_enhancer import Allin1Enhancer
 from core import MusicLooperCore
 
 # ── Request models ───────────────────────────────────────────────────
@@ -144,6 +147,28 @@ def _on_progress(current: int, total: int, stage: str) -> None:
 
 
 core.set_progress_callback(_on_progress)
+
+
+@lru_cache(maxsize=1)
+def _is_allin1_available_cached() -> bool:
+    try:
+        return Allin1Enhancer.is_available()
+    except Exception:
+        return False
+
+
+def _collect_runtime_info() -> dict:
+    path_value = os.getenv("PATH", "")
+    return {
+        "python_executable": sys.executable,
+        "pid": os.getpid(),
+        "cwd": os.getcwd(),
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "path": path_value,
+        "ffmpeg_path": shutil.which("ffmpeg"),
+        "madmom_available": MusicLooperCore._is_madmom_available(),
+        "allin1_available": _is_allin1_available_cached(),
+    }
 
 
 # ── App lifecycle ────────────────────────────────────────────────────
@@ -216,6 +241,12 @@ async def get_audio():
     if path is None:
         return JSONResponse(content={"error": "No audio loaded"}, status_code=400)
     return FileResponse(path, media_type="audio/wav", filename="audio.wav")
+
+
+@app.get("/runtime")
+async def get_runtime():
+    """Get sidecar runtime diagnostics (PATH, ffmpeg, optional deps)."""
+    return JSONResponse(content=_collect_runtime_info())
 
 
 @app.post("/export/loop")
