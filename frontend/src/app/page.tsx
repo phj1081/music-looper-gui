@@ -30,9 +30,11 @@ import { Progress } from "@/components/ui/progress";
 import { LoopEditor } from "@/components/loop-editor";
 
 type Status = "idle" | "selecting" | "analyzing" | "ready" | "error";
+type AudioHealthEventType = "contextlost" | "contextrecovered" | "contextrecoveryfailed";
 type LoopingMedia = {
   setLoopPoints?: (startSeconds: number, endSeconds: number) => void;
   setLooping?: (enabled: boolean) => void;
+  play?: () => Promise<void>;
 };
 
 type SortMode = "score_desc" | "length_desc" | "length_asc";
@@ -429,8 +431,23 @@ export default function Home() {
 
         const previewStart = Math.max(0, loopEndTime - 3);
         wavesurferRef.current.setTime(previewStart);
-        wavesurferRef.current.play();
-        setIsPlaying(true);
+        try {
+          await wavesurferRef.current.play();
+          setIsPlaying(true);
+        } catch (error) {
+          console.warn("WaveSurfer play failed during loop select, retrying:", error);
+          setStatusMessage("오디오 엔진 복구 후 재시도 중...");
+          try {
+            await media.play?.();
+            await wavesurferRef.current.play();
+            setIsPlaying(true);
+            setStatusMessage("오디오 엔진 복구 완료");
+          } catch (retryError) {
+            console.error("Loop select playback retry failed:", retryError);
+            setIsPlaying(false);
+            setStatusMessage("재생 복구 실패: 재생 버튼을 다시 눌러주세요");
+          }
+        }
       }
     },
     [analysisResult, isLooping]
@@ -440,8 +457,9 @@ export default function Home() {
     if (!wavesurferRef.current || !selectedLoop || !analysisResult) return;
 
     const sampleRate = analysisResult.sample_rate;
+    const isActuallyPlaying = wavesurferRef.current.isPlaying();
 
-    if (isPlaying) {
+    if (isPlaying || isActuallyPlaying) {
       wavesurferRef.current.pause();
       setIsPlaying(false);
     } else {
@@ -459,10 +477,45 @@ export default function Home() {
       const previewTime = Math.max(0, endTime - 3);
 
       wavesurferRef.current.setTime(previewTime);
-      wavesurferRef.current.play();
-      setIsPlaying(true);
+      try {
+        await wavesurferRef.current.play();
+        setIsPlaying(true);
+      } catch (error) {
+        console.warn("WaveSurfer play failed, trying media recovery:", error);
+        setStatusMessage("오디오 엔진 복구 후 재시도 중...");
+        try {
+          await media.play?.();
+          await wavesurferRef.current.play();
+          setIsPlaying(true);
+          setStatusMessage("오디오 엔진 복구 완료");
+        } catch (retryError) {
+          console.error("Playback recovery failed:", retryError);
+          setIsPlaying(false);
+          setStatusMessage("재생 실패: 재생 버튼을 다시 눌러주세요");
+        }
+      }
     }
   }, [isPlaying, selectedLoop, analysisResult, isLooping]);
+
+  const handlePlaybackStateChange = useCallback((playing: boolean) => {
+    setIsPlaying(playing);
+  }, []);
+
+  const handleAudioHealthEvent = useCallback(
+    (type: AudioHealthEventType) => {
+      if (status !== "ready") return;
+      if (type === "contextlost") {
+        setStatusMessage("오디오 엔진이 일시 중단되었습니다. 자동 복구 중...");
+        return;
+      }
+      if (type === "contextrecovered") {
+        setStatusMessage("오디오 엔진 복구 완료");
+        return;
+      }
+      setStatusMessage("오디오 엔진 복구 실패: 재생 버튼을 다시 눌러주세요");
+    },
+    [status]
+  );
 
   const handleWaveformReady = useCallback(() => {
     if (wavesurferRef.current) {
@@ -703,6 +756,8 @@ export default function Home() {
                   onReady={handleWaveformReady}
                   onTimeUpdate={handleTimeUpdate}
                   onLoopChange={handleLoopChange}
+                  onPlaybackStateChange={handlePlaybackStateChange}
+                  onAudioHealthEvent={handleAudioHealthEvent}
                   wavesurferRef={wavesurferRef}
                 />
                 <div className="flex justify-end px-1">

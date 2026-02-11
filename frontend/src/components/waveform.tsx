@@ -7,6 +7,8 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { LoopingWebAudioPlayer } from "@/lib/looping-webaudio-player";
 
+type AudioHealthEventType = "contextlost" | "contextrecovered" | "contextrecoveryfailed";
+
 function formatTimeMs(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00.000";
   const mins = Math.floor(seconds / 60);
@@ -24,6 +26,8 @@ interface WaveformProps {
   onReady?: (() => void) | undefined;
   onTimeUpdate?: ((time: number) => void) | undefined;
   onLoopChange?: ((loopStartSample: number, loopEndSample: number) => void) | undefined;
+  onPlaybackStateChange?: ((playing: boolean) => void) | undefined;
+  onAudioHealthEvent?: ((type: AudioHealthEventType) => void) | undefined;
   wavesurferRef?: React.RefObject<WaveSurfer | null> | undefined;
 }
 
@@ -37,6 +41,8 @@ export function Waveform({
   onReady,
   onTimeUpdate,
   onLoopChange,
+  onPlaybackStateChange,
+  onAudioHealthEvent,
   wavesurferRef,
 }: WaveformProps) {
   const ZOOM_MIN = 0;
@@ -58,6 +64,8 @@ export function Waveform({
   const onReadyRef = useRef(onReady);
   const onTimeUpdateRef = useRef(onTimeUpdate);
   const onLoopChangeRef = useRef(onLoopChange);
+  const onPlaybackStateChangeRef = useRef(onPlaybackStateChange);
+  const onAudioHealthEventRef = useRef(onAudioHealthEvent);
 
   const clampZoom = useCallback(
     (value: number) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(value))),
@@ -80,6 +88,14 @@ export function Waveform({
   useEffect(() => {
     onLoopChangeRef.current = onLoopChange;
   }, [onLoopChange]);
+
+  useEffect(() => {
+    onPlaybackStateChangeRef.current = onPlaybackStateChange;
+  }, [onPlaybackStateChange]);
+
+  useEffect(() => {
+    onAudioHealthEventRef.current = onAudioHealthEvent;
+  }, [onAudioHealthEvent]);
 
   useEffect(() => {
     if (!containerRef.current || !audioUrl) return;
@@ -114,20 +130,57 @@ export function Waveform({
       setLoadError("오디오/파형 로딩 실패");
     });
 
-    ws.on("ready", () => {
+    const handleWsReady = () => {
       setLoadError(null);
       setIsWsReady(true);
       onReadyRef.current?.();
-    });
+    };
 
-    ws.on("timeupdate", (time) => {
+    const handleWsTimeUpdate = (time: number) => {
       onTimeUpdateRef.current?.(time);
-    });
+    };
 
-    ws.on("error", (err) => {
+    const handleWsError = (err: Error) => {
       console.error("WaveSurfer error:", err);
       setLoadError("오디오/파형 로딩 실패");
-    });
+      onPlaybackStateChangeRef.current?.(false);
+    };
+
+    const handleWsPlay = () => {
+      onPlaybackStateChangeRef.current?.(true);
+    };
+
+    const handleWsPause = () => {
+      onPlaybackStateChangeRef.current?.(false);
+    };
+
+    const handleWsFinish = () => {
+      onPlaybackStateChangeRef.current?.(false);
+    };
+
+    const handleContextLost = () => {
+      onAudioHealthEventRef.current?.("contextlost");
+      onPlaybackStateChangeRef.current?.(false);
+    };
+
+    const handleContextRecovered = () => {
+      onAudioHealthEventRef.current?.("contextrecovered");
+    };
+
+    const handleContextRecoveryFailed = () => {
+      onAudioHealthEventRef.current?.("contextrecoveryfailed");
+      onPlaybackStateChangeRef.current?.(false);
+    };
+
+    ws.on("ready", handleWsReady);
+    ws.on("timeupdate", handleWsTimeUpdate);
+    ws.on("error", handleWsError);
+    ws.on("play", handleWsPlay);
+    ws.on("pause", handleWsPause);
+    ws.on("finish", handleWsFinish);
+    media.addEventListener("contextlost", handleContextLost as EventListener);
+    media.addEventListener("contextrecovered", handleContextRecovered as EventListener);
+    media.addEventListener("contextrecoveryfailed", handleContextRecoveryFailed as EventListener);
 
     internalWsRef.current = ws;
     if (wavesurferRef) {
@@ -147,6 +200,15 @@ export function Waveform({
         window.clearTimeout(dragHideTimeoutRef.current);
         dragHideTimeoutRef.current = null;
       }
+      ws.un("ready", handleWsReady);
+      ws.un("timeupdate", handleWsTimeUpdate);
+      ws.un("error", handleWsError);
+      ws.un("play", handleWsPlay);
+      ws.un("pause", handleWsPause);
+      ws.un("finish", handleWsFinish);
+      media.removeEventListener("contextlost", handleContextLost as EventListener);
+      media.removeEventListener("contextrecovered", handleContextRecovered as EventListener);
+      media.removeEventListener("contextrecoveryfailed", handleContextRecoveryFailed as EventListener);
       media.pause();
       media.removeAttribute("src");
       ws.destroy();
@@ -333,7 +395,30 @@ export function Waveform({
     if (!internalWsRef.current) return;
 
     if (isPlaying && !internalWsRef.current.isPlaying()) {
-      internalWsRef.current.play();
+      const ws = internalWsRef.current;
+      const recoverAndPlay = async () => {
+        try {
+          await ws.play();
+        } catch (error) {
+          console.warn("WaveSurfer play failed, retrying with media recovery", error);
+          const media = ws.getMediaElement() as unknown as Partial<LoopingWebAudioPlayer>;
+          if (typeof media.play === "function") {
+            try {
+              await media.play();
+            } catch (mediaError) {
+              console.warn("Direct media.play recovery failed:", mediaError);
+            }
+          }
+          try {
+            await ws.play();
+          } catch (retryError) {
+            console.error("WaveSurfer retry play failed:", retryError);
+            onAudioHealthEventRef.current?.("contextrecoveryfailed");
+            onPlaybackStateChangeRef.current?.(false);
+          }
+        }
+      };
+      void recoverAndPlay();
     } else if (!isPlaying && internalWsRef.current.isPlaying()) {
       internalWsRef.current.pause();
     }

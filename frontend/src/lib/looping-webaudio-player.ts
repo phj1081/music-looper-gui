@@ -1,4 +1,5 @@
 const DEFAULT_FADE_SECONDS = 0.004;
+type AudioHealthEventName = "contextlost" | "contextrecovered" | "contextrecoveryfailed";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -34,6 +35,9 @@ export class LoopingWebAudioPlayer extends EventTarget {
   private pendingPlayPromise: Promise<void> | null = null;
   private resolvePendingPlay: (() => void) | null = null;
   private resumePromise: Promise<void> | null = null;
+  private contextRecoveryPromise: Promise<boolean> | null = null;
+  private lastContextState: string;
+  private readonly contextStateChangeHandler: () => void;
 
   // Playback state
   paused = true;
@@ -58,10 +62,91 @@ export class LoopingWebAudioPlayer extends EventTarget {
     this.gainNode = this.audioContext.createGain();
     this.gainNode.gain.value = 1;
     this.gainNode.connect(this.audioContext.destination);
+    this.lastContextState = this.getContextState();
+    this.contextStateChangeHandler = () => {
+      this.handleContextStateChange();
+    };
+    this.audioContext.addEventListener("statechange", this.contextStateChangeHandler);
+  }
+
+  private getContextState(): string {
+    return this.audioContext.state as string;
+  }
+
+  private isRecoverableContextState(state: string): boolean {
+    return state === "suspended" || state === "interrupted";
+  }
+
+  private emitContextEvent(type: AudioHealthEventName, reason: string): void {
+    this.dispatchEvent(
+      new CustomEvent(type, {
+        detail: {
+          reason,
+          state: this.getContextState(),
+        },
+      }),
+    );
+  }
+
+  private handleContextStateChange(): void {
+    const currentState = this.getContextState();
+    const previousState = this.lastContextState;
+    this.lastContextState = currentState;
+    if (currentState === previousState) return;
+
+    if (this.isRecoverableContextState(currentState) && !this.paused) {
+      this.emitContextEvent("contextlost", "statechange");
+      void this.recoverContextIfNeeded("statechange");
+      return;
+    }
+
+    if (
+      currentState === "running" &&
+      this.isRecoverableContextState(previousState) &&
+      !this.paused &&
+      this.buffer &&
+      !this.bufferNode
+    ) {
+      const offset = clamp(this.currentTime, 0, this.duration || Infinity);
+      this.positionSeconds = offset;
+      this.positionAtStartSeconds = offset;
+      this.startedAtContextSeconds = this.audioContext.currentTime;
+      this.startSource(offset);
+    }
+  }
+
+  private async recoverContextIfNeeded(reason: string): Promise<boolean> {
+    const state = this.getContextState();
+    if (state === "running") return true;
+    if (state === "closed") {
+      this.emitContextEvent("contextrecoveryfailed", reason);
+      return false;
+    }
+    if (!this.isRecoverableContextState(state)) return false;
+
+    if (!this.contextRecoveryPromise) {
+      this.contextRecoveryPromise = (async () => {
+        try {
+          await this.audioContext.resume();
+        } catch (error) {
+          console.warn("LoopingWebAudioPlayer: audio context resume failed", error);
+        }
+
+        const recovered = this.getContextState() === "running";
+        this.emitContextEvent(recovered ? "contextrecovered" : "contextrecoveryfailed", reason);
+        return recovered;
+      })();
+    }
+
+    try {
+      return await this.contextRecoveryPromise;
+    } finally {
+      this.contextRecoveryPromise = null;
+    }
   }
 
   private requestResume(): void {
-    if (this.audioContext.state !== "suspended") return;
+    if (!this.isRecoverableContextState(this.getContextState())) return;
     if (this.resumePromise) return;
 
     this.resumePromise = this.audioContext.resume().catch(() => {
@@ -80,7 +165,7 @@ export class LoopingWebAudioPlayer extends EventTarget {
       return;
     }
 
-    if (this.audioContext.state === "suspended") {
+    if (this.isRecoverableContextState(this.getContextState())) {
       try {
         await this.audioContext.resume();
       } catch {
@@ -360,7 +445,12 @@ export class LoopingWebAudioPlayer extends EventTarget {
       return this.pendingPlayPromise;
     }
 
+    await this.recoverContextIfNeeded("play");
     await this.ensureResumed();
+    if (this.getContextState() !== "running") {
+      this.emitContextEvent("contextrecoveryfailed", "play");
+      throw new Error(`Audio context is ${this.getContextState()}`);
+    }
 
     this.playRequested = false;
 
@@ -373,7 +463,18 @@ export class LoopingWebAudioPlayer extends EventTarget {
     this.positionAtStartSeconds = offset;
     this.startedAtContextSeconds = now;
 
-    this.startSource(offset);
+    let started = this.startSource(offset);
+    if (!started) {
+      const recovered = await this.recoverContextIfNeeded("play-start");
+      if (recovered) {
+        started = this.startSource(offset);
+      }
+    }
+    if (!started) {
+      this.paused = true;
+      this.emitContextEvent("contextrecoveryfailed", "play-start");
+      throw new Error("Failed to start audio playback");
+    }
     this.dispatchEvent(new Event("play"));
 
     this.resolvePendingPlay?.();
@@ -399,16 +500,24 @@ export class LoopingWebAudioPlayer extends EventTarget {
     this.dispatchEvent(new Event("pause"));
   }
 
-  private startSource(offsetSeconds: number): void {
-    if (!this.buffer) return;
+  private startSource(offsetSeconds: number): boolean {
+    if (!this.buffer) return false;
+    if (this.getContextState() !== "running") return false;
 
     // Make sure any previous node is gone
     this.stopInternal();
 
-    const source = this.audioContext.createBufferSource();
-    source.buffer = this.buffer;
-    source.playbackRate.setValueAtTime(this._playbackRate, this.audioContext.currentTime);
-    source.connect(this.gainNode);
+    let source: AudioBufferSourceNode;
+    try {
+      source = this.audioContext.createBufferSource();
+      source.buffer = this.buffer;
+      source.playbackRate.setValueAtTime(this._playbackRate, this.audioContext.currentTime);
+      source.connect(this.gainNode);
+    } catch (error) {
+      console.error("LoopingWebAudioPlayer startSource creation failed:", error);
+      this.dispatchEvent(new Event("error"));
+      return false;
+    }
 
     if (this.getLoopIsValid()) {
       source.loop = true;
@@ -440,7 +549,15 @@ export class LoopingWebAudioPlayer extends EventTarget {
     };
 
     this.bufferNode = source;
-    source.start(now, offsetSeconds);
+    try {
+      source.start(now, offsetSeconds);
+      return true;
+    } catch (error) {
+      console.error("LoopingWebAudioPlayer source.start failed:", error);
+      this.bufferNode = null;
+      this.dispatchEvent(new Event("error"));
+      return false;
+    }
   }
 
   private restartAt(offsetSeconds: number): void {
@@ -448,7 +565,9 @@ export class LoopingWebAudioPlayer extends EventTarget {
     this.positionSeconds = offsetSeconds;
     this.positionAtStartSeconds = offsetSeconds;
     this.startedAtContextSeconds = this.audioContext.currentTime;
-    this.startSource(offsetSeconds);
+    if (!this.startSource(offsetSeconds)) {
+      void this.recoverContextIfNeeded("restart");
+    }
   }
 
   private stopInternal(): void {
@@ -526,6 +645,7 @@ export class LoopingWebAudioPlayer extends EventTarget {
     this._src = "";
     this.loadAbortController?.abort();
     this.loadAbortController = null;
+    this.audioContext.removeEventListener("statechange", this.contextStateChangeHandler);
     void this.audioContext.close().catch(() => {
       // Ignore
     });
