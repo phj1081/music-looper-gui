@@ -54,6 +54,17 @@ fn build_sidecar_path_env() -> Option<String> {
         push_unique(&mut paths, PathBuf::from(candidate));
     }
 
+    #[cfg(target_os = "linux")]
+    for candidate in [
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ] {
+        push_unique(&mut paths, PathBuf::from(candidate));
+    }
+
     env::join_paths(paths)
         .ok()
         .map(|value| value.to_string_lossy().into_owned())

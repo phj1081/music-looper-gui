@@ -134,8 +134,17 @@ cd music-looper-gui
 cd backend
 uv sync --all-extras --no-build-isolation-package madmom --no-build-isolation-package natten
 
+# 사이드카 빌드 (최초 1회 또는 백엔드 코드 변경 시)
+uv run --all-extras --with pyinstaller pyinstaller MusicLooperSidecar.spec --noconfirm
+cd ..
+
+# 사이드카 바이너리를 Tauri가 인식하는 경로에 복사
+TARGET=$(rustc -vV | grep host | awk '{print $2}')
+mkdir -p src-tauri/binaries
+cp -r backend/dist/music-looper-sidecar "src-tauri/binaries/music-looper-sidecar-${TARGET}"
+
 # 프론트엔드 의존성 설치
-cd ../frontend
+cd frontend
 pnpm install
 
 # 개발 모드 실행
@@ -143,11 +152,15 @@ cd ..
 pnpm dev
 ```
 
+> **Windows 사용자**: 위 셸 명령어는 Git Bash 또는 WSL에서 실행해주세요.
+
 ### 프로덕션 빌드
 
 ```bash
 bash build.sh
 ```
+
+> **Windows 사용자**: Git Bash 또는 WSL에서 실행해주세요.
 
 PyInstaller로 Python 사이드카를 빌드한 뒤 Tauri가 앱 번들로 패키징합니다.
 
