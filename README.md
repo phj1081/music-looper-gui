@@ -137,7 +137,8 @@ pnpm setup
 pnpm dev
 ```
 
-> `pnpm setup`은 백엔드/프론트엔드 의존성 설치 및 dev 사이드카 래퍼 스크립트 생성을 수행합니다.
+> `pnpm setup`은 백엔드/프론트엔드 의존성 설치를 수행합니다 (최초 1회).
+> `pnpm dev` 실행 시 dev 사이드카 래퍼가 자동으로 세팅되므로, 프로덕션 빌드 후에도 별도 설정 없이 바로 개발 모드로 전환할 수 있습니다.
 > Python 코드 수정 시 앱만 재시작하면 반영됩니다 (사이드카 재빌드 불필요).
 
 > **Windows 사용자**: Git Bash 또는 WSL에서 실행해주세요.
@@ -159,6 +160,17 @@ PyInstaller로 Python 사이드카를 빌드한 뒤 Tauri가 앱 번들로 패�
 | Windows | `.msi` / `.exe` |
 
 출력: `src-tauri/target/release/bundle/`
+
+## 설치
+
+[Releases](https://github.com/phj1081/music-looper-gui/releases) 페이지에서 OS에 맞는 설치 파일을 다운로드하세요.
+
+> **macOS 사용자**: 앱이 코드 서명되어 있지 않아 처음 실행 시 보안 경고가 나타날 수 있습니다.
+>
+> 1. `.dmg`를 열고 앱을 Applications 폴더로 드래그
+> 2. 앱을 **우클릭 → 열기** → 확인 대화상자에서 **열기** 클릭
+>
+> 최초 1회만 필요하며, 이후에는 정상적으로 실행됩니다.
 
 ## 사용법
 

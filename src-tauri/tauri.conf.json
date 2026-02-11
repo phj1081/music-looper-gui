@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.music-looper.app",
   "build": {
-    "beforeDevCommand": "pnpm -C frontend dev",
+    "beforeDevCommand": "bash scripts/ensure-dev-sidecar.sh && pnpm -C frontend dev",
     "devUrl": "http://localhost:3000",
     "beforeBuildCommand": "pnpm -C frontend build",
     "frontendDist": "../frontend/out"

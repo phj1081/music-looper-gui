@@ -15,20 +15,7 @@ cd ..
 
 # 2. Create dev sidecar wrapper script
 echo "2. Creating dev sidecar wrapper..."
-TARGET=$(rustc -vV | grep host | awk '{print $2}')
-SIDECAR_DST="src-tauri/binaries/music-looper-sidecar-${TARGET}"
-
-mkdir -p "$(dirname "${SIDECAR_DST}")"
-rm -rf "${SIDECAR_DST}"
-
-cat > "${SIDECAR_DST}" << 'WRAPPER'
-#!/bin/bash
-cd "$(git rev-parse --show-toplevel)/backend"
-exec uv run python http_server.py "$@"
-WRAPPER
-chmod +x "${SIDECAR_DST}"
-
-echo "   Dev sidecar created at: ${SIDECAR_DST}"
+bash scripts/ensure-dev-sidecar.sh
 
 # 3. Frontend dependencies
 echo "3. Installing frontend dependencies..."
