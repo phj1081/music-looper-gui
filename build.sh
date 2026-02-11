@@ -21,7 +21,7 @@ TARGET=$(rustc -vV | grep host | awk '{print $2}')
 SIDECAR_SRC="backend/dist/music-looper-sidecar"
 SIDECAR_DST="src-tauri/binaries/music-looper-sidecar-${TARGET}"
 
-# Remove old binary if exists
+mkdir -p "$(dirname "${SIDECAR_DST}")"
 rm -rf "${SIDECAR_DST}"
 
 if [ -d "${SIDECAR_SRC}" ]; then

@@ -2,6 +2,7 @@
   "name": "music-looper-gui",
   "private": true,
   "scripts": {
+    "setup": "bash scripts/setup.sh",
     "dev": "./frontend/node_modules/.bin/tauri dev",
     "build": "bash ./build.sh",
     "build:tauri": "bash ./build.sh",

@@ -130,29 +130,17 @@ music-looper-gui/
 git clone https://github.com/phj1081/music-looper-gui.git
 cd music-looper-gui
 
-# 백엔드 의존성 설치
-cd backend
-uv sync --all-extras --no-build-isolation-package madmom --no-build-isolation-package natten
-
-# 사이드카 빌드 (최초 1회 또는 백엔드 코드 변경 시)
-uv run --all-extras --with pyinstaller pyinstaller MusicLooperSidecar.spec --noconfirm
-cd ..
-
-# 사이드카 바이너리를 Tauri가 인식하는 경로에 복사
-TARGET=$(rustc -vV | grep host | awk '{print $2}')
-mkdir -p src-tauri/binaries
-cp -r backend/dist/music-looper-sidecar "src-tauri/binaries/music-looper-sidecar-${TARGET}"
-
-# 프론트엔드 의존성 설치
-cd frontend
-pnpm install
+# 초기 설정 (의존성 설치 + 사이드카 빌드, 최초 1회)
+pnpm setup
 
 # 개발 모드 실행
-cd ..
 pnpm dev
 ```
 
-> **Windows 사용자**: 위 셸 명령어는 Git Bash 또는 WSL에서 실행해주세요.
+> `pnpm setup`은 백엔드/프론트엔드 의존성 설치, 사이드카(PyInstaller) 빌드 및 복사를 자동으로 수행합니다.
+> 백엔드 코드를 수정한 경우 `pnpm setup`을 다시 실행해주세요.
+
+> **Windows 사용자**: Git Bash 또는 WSL에서 실행해주세요.
 
 ### 프로덕션 빌드
 
