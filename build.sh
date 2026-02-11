@@ -37,8 +37,12 @@ fi
 
 echo "   Sidecar copied to: ${SIDECAR_DST}"
 
-# 3. Build Tauri app (includes frontend build via beforeBuildCommand)
-echo "3. Building Tauri application..."
+# 3. Install frontend dependencies
+echo "3. Installing frontend dependencies..."
+pnpm -C frontend install --frozen-lockfile
+
+# 4. Build Tauri app (includes frontend build via beforeBuildCommand)
+echo "4. Building Tauri application..."
 ./frontend/node_modules/.bin/tauri build
 
 echo ""
