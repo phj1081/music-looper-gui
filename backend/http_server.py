@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import runpy
+import signal
 import sys
 import traceback
 from contextlib import asynccontextmanager
@@ -283,6 +284,13 @@ async def progress_stream(request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/shutdown")
+async def shutdown():
+    """Graceful shutdown endpoint (defensive fallback)."""
+    os.kill(os.getpid(), signal.SIGTERM)
+    return JSONResponse(content={"status": "shutting_down"})
 
 
 # ── Main ─────────────────────────────────────────────────────────────

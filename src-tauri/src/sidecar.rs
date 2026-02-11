@@ -4,13 +4,14 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::AppHandle;
 use tauri::Manager;
-use tauri_plugin_shell::process::CommandEvent;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 /// The only state Rust needs: the port the Python HTTP server is listening on.
 pub struct ServerState {
     pub port: Mutex<Option<u16>>,
     pub startup_error: Mutex<Option<String>>,
+    pub child: Mutex<Option<CommandChild>>,
 }
 
 impl Default for ServerState {
@@ -18,6 +19,7 @@ impl Default for ServerState {
         Self {
             port: Mutex::new(None),
             startup_error: Mutex::new(None),
+            child: Mutex::new(None),
         }
     }
 }
@@ -68,7 +70,7 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), String> {
         sidecar_command = sidecar_command.env("PATH", path_env);
     }
 
-    let (mut rx, _child) = sidecar_command
+    let (mut rx, child) = sidecar_command
         .spawn()
         .map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
 
@@ -117,5 +119,18 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), String> {
     if let Ok(mut startup_error) = state.startup_error.lock() {
         *startup_error = None;
     }
+    if let Ok(mut child_guard) = state.child.lock() {
+        *child_guard = Some(child);
+    }
     Ok(())
+}
+
+/// Kill the sidecar process (called on app exit).
+pub fn kill_sidecar(state: &ServerState) {
+    if let Ok(mut guard) = state.child.lock() {
+        if let Some(child) = guard.take() {
+            let _ = child.kill();
+            log::info!("Sidecar process killed");
+        }
+    }
 }
