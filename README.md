@@ -145,7 +145,7 @@ pnpm dev
 ### 프로덕션 빌드
 
 ```bash
-bash build.sh
+pnpm build
 ```
 
 > **Windows 사용자**: Git Bash 또는 WSL에서 실행해주세요.
