@@ -18,6 +18,17 @@
 
 ---
 
+## 지원 OS
+
+| OS | 기본 루프 탐지 | 비트 정렬 | 구조 분석 | 비고 |
+|----|:-:|:-:|:-:|------|
+| **macOS** (Apple Silicon) | O | O | O | |
+| **macOS** (Intel) | O | O | O | CI 빌드 미제공 (로컬 빌드 가능) |
+| **Linux** (x86_64) | O | O | O | |
+| **Windows** (x86_64) | O | O | X | natten 미지원으로 구조 분석 불가 |
+
+> **구조 분석**은 allin1 + natten 기반 기능입니다. natten이 Windows 공식 휠을 제공하지 않아 Windows에서는 해당 기능이 비활성화됩니다.
+
 ## 주요 기능
 
 | 기능 | 설명 |
@@ -137,7 +148,13 @@ pnpm dev
 bash build.sh
 ```
 
-PyInstaller로 Python 사이드카를 빌드한 뒤 Tauri가 `.app`/`.dmg` 번들로 패키징합니다.
+PyInstaller로 Python 사이드카를 빌드한 뒤 Tauri가 앱 번들로 패키징합니다.
+
+| OS | 출력 형식 |
+|----|-----------|
+| macOS | `.app` / `.dmg` |
+| Linux | `.AppImage` / `.deb` |
+| Windows | `.msi` / `.exe` |
 
 출력: `src-tauri/target/release/bundle/`
 
