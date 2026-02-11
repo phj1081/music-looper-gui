@@ -45,7 +45,7 @@ def _discover_package_modules(package_name: str) -> list[str]:
             continue
 
         suffix = file_path.suffix
-        if suffix not in {".py", ".so"}:
+        if suffix not in {".py", ".so", ".pyd"}:
             continue
 
         rel = file_path.relative_to(package_root.parent)

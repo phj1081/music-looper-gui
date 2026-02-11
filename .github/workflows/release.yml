@@ -28,12 +28,18 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-          # Uncomment to enable Intel Mac builds:
-          # - os: macos-13
-          #   target: x86_64-apple-darwin
+            uv_extra_flags: "--no-build-isolation-package natten"
+            sidecar_ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            uv_extra_flags: ""
+            sidecar_ext: ".exe"
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout
@@ -68,7 +74,7 @@ jobs:
         run: |
           uv sync --all-extras \
             --no-build-isolation-package madmom \
-            --no-build-isolation-package natten
+            ${{ matrix.uv_extra_flags }}
 
       - name: Build sidecar with PyInstaller
         working-directory: backend
@@ -78,8 +84,8 @@ jobs:
 
       - name: Copy sidecar to Tauri binaries
         run: |
-          SIDECAR_SRC="backend/dist/music-looper-sidecar"
-          SIDECAR_DST="src-tauri/binaries/music-looper-sidecar-${{ matrix.target }}"
+          SIDECAR_SRC="backend/dist/music-looper-sidecar${{ matrix.sidecar_ext }}"
+          SIDECAR_DST="src-tauri/binaries/music-looper-sidecar-${{ matrix.target }}${{ matrix.sidecar_ext }}"
 
           mkdir -p "$(dirname "${SIDECAR_DST}")"
           rm -rf "${SIDECAR_DST}"
