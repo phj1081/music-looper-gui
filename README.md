@@ -130,15 +130,15 @@ music-looper-gui/
 git clone https://github.com/phj1081/music-looper-gui.git
 cd music-looper-gui
 
-# 초기 설정 (의존성 설치 + 사이드카 빌드, 최초 1회)
+# 초기 설정 (의존성 설치 + dev 사이드카 생성, 최초 1회)
 pnpm setup
 
 # 개발 모드 실행
 pnpm dev
 ```
 
-> `pnpm setup`은 백엔드/프론트엔드 의존성 설치, 사이드카(PyInstaller) 빌드 및 복사를 자동으로 수행합니다.
-> 백엔드 코드를 수정한 경우 `pnpm setup`을 다시 실행해주세요.
+> `pnpm setup`은 백엔드/프론트엔드 의존성 설치 및 dev 사이드카 래퍼 스크립트 생성을 수행합니다.
+> Python 코드 수정 시 앱만 재시작하면 반영됩니다 (사이드카 재빌드 불필요).
 
 > **Windows 사용자**: Git Bash 또는 WSL에서 실행해주세요.
 

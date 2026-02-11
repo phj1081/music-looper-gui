@@ -13,36 +13,27 @@ uv sync --all-extras \
   --no-build-isolation-package natten
 cd ..
 
-# 2. Build sidecar
-echo "2. Building Python sidecar..."
-cd backend
-uv run --all-extras --with pyinstaller \
-  pyinstaller MusicLooperSidecar.spec --noconfirm
-cd ..
-
-# 3. Copy sidecar to Tauri binaries
-echo "3. Copying sidecar to Tauri binaries..."
+# 2. Create dev sidecar wrapper script
+echo "2. Creating dev sidecar wrapper..."
 TARGET=$(rustc -vV | grep host | awk '{print $2}')
-SIDECAR_SRC="backend/dist/music-looper-sidecar"
 SIDECAR_DST="src-tauri/binaries/music-looper-sidecar-${TARGET}"
 
 mkdir -p "$(dirname "${SIDECAR_DST}")"
 rm -rf "${SIDECAR_DST}"
 
-if [ -d "${SIDECAR_SRC}" ]; then
-    cp -r "${SIDECAR_SRC}" "${SIDECAR_DST}"
-elif [ -f "${SIDECAR_SRC}" ]; then
-    cp "${SIDECAR_SRC}" "${SIDECAR_DST}"
-else
-    echo "ERROR: Sidecar binary not found at ${SIDECAR_SRC}"
-    exit 1
-fi
+cat > "${SIDECAR_DST}" << 'WRAPPER'
+#!/bin/bash
+cd "$(git rev-parse --show-toplevel)/backend"
+exec uv run python http_server.py "$@"
+WRAPPER
+chmod +x "${SIDECAR_DST}"
 
-echo "   Sidecar copied to: ${SIDECAR_DST}"
+echo "   Dev sidecar created at: ${SIDECAR_DST}"
 
-# 4. Frontend dependencies
-echo "4. Installing frontend dependencies..."
+# 3. Frontend dependencies
+echo "3. Installing frontend dependencies..."
 pnpm -C frontend install
 
 echo ""
 echo "Setup complete! Run 'pnpm dev' to start development."
+echo "Python backend code changes are reflected on app restart (no rebuild needed)."
