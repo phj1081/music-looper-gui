@@ -16,6 +16,7 @@ import collections.abc
 import contextlib
 import numpy as np
 import sys
+import types
 import os
 import tempfile
 import warnings
@@ -23,6 +24,211 @@ from pathlib import Path
 
 if TYPE_CHECKING:
     from deep_analyzer import DeepLoopCandidate
+
+
+def _install_pure_pytorch_natten_fallback() -> None:
+    """Install a pure PyTorch fallback for natten's neighborhood attention functions.
+
+    Creates fake ``natten`` and ``natten.functional`` modules in ``sys.modules``
+    so that ``from natten.functional import natten1dqkrpb, ...`` succeeds without
+    the native natten package.  Used on platforms where natten has no pre-built
+    wheel (e.g. Windows).
+
+    The implementation replicates natten's *window-shifting* boundary handling
+    (not per-element clamping) and its relative-position-bias indexing scheme
+    which were empirically verified against the native natten library.
+    """
+    if "natten" in sys.modules:
+        return
+
+    import torch
+
+    # ------------------------------------------------------------------ helpers
+    def _na1d_neighbor_info(
+        L: int, ks: int, d: int, device: torch.device,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return ``(neighbors, rpb_indices)`` each of shape ``(L, ks)``.
+
+        *neighbors*: absolute position index of each neighbor slot.
+        *rpb_indices*: index into the ``(2*ks-1,)`` RPB table.
+
+        Uses natten's window-shifting strategy: the ks-sized window is shifted
+        so that all positions stay within ``[0, L-1]`` while keeping neighbours
+        aligned to ``i mod d``.
+        """
+        half = ks // 2
+        pos = torch.arange(L, device=device)
+
+        ideal_start = pos - half * d          # (L,)
+        lo = pos % d                          # per-position aligned minimum
+        hi_scalar = L - 1 - (ks - 1) * d     # maximum possible start
+        hi = hi_scalar - ((hi_scalar - lo) % d)  # round down to alignment
+        hi = torch.where(hi >= lo, hi, lo)
+
+        j_start = ideal_start.clamp(min=0)
+        j_start = torch.max(j_start, lo)
+        j_start = torch.min(j_start, hi)
+
+        offsets = torch.arange(ks, device=device) * d
+        neighbors = j_start.unsqueeze(1) + offsets.unsqueeze(0)  # (L, ks)
+
+        k_range = torch.arange(ks, device=device)
+        shift = (j_start - pos) // d
+        rpb_idx = k_range.unsqueeze(0) + shift.unsqueeze(1) + (ks - 1)  # (L, ks)
+
+        return neighbors.long(), rpb_idx.long()
+
+    def _na2d_neighbor_info(
+        H: int, W: int, ks: int, d: int, device: torch.device,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return ``(row_nb, col_nb, row_rpb, col_rpb)``.
+
+        Shapes: row_nb ``(H, ks)``, col_nb ``(W, ks)``,
+        row_rpb ``(H, ks)``, col_rpb ``(W, ks)``.
+        """
+        row_nb, row_rpb = _na1d_neighbor_info(H, ks, d, device)
+        col_nb, col_rpb = _na1d_neighbor_info(W, ks, d, device)
+        return row_nb, col_nb, row_rpb, col_rpb
+
+    # ----------------------------------------------- 1-D functions
+    def natten1dqkrpb(
+        query: torch.Tensor,
+        key: torch.Tensor,
+        rpb: torch.Tensor,
+        kernel_size: int,
+        dilation: int,
+    ) -> torch.Tensor:
+        """Pure-PyTorch 1-D neighborhood QK + RPB.
+
+        Args:
+            query, key: ``(B, heads, L, D)``
+            rpb: ``(heads, 2*ks-1)``
+        Returns:
+            ``(B, heads, L, ks)``
+        """
+        _B, _heads, L, _D = query.shape
+        neighbors, rpb_idx = _na1d_neighbor_info(L, kernel_size, dilation, query.device)
+
+        # Gather neighbor keys: (B, heads, L, ks, D)
+        K_nb = key[:, :, neighbors]
+        # Dot product over D → (B, heads, L, ks)
+        scores = torch.einsum("bhld,bhlkd->bhlk", query, K_nb)
+        # Add RPB: rpb[:, rpb_idx] → (heads, L, ks)
+        scores = scores + rpb[:, rpb_idx].unsqueeze(0)
+        return scores
+
+    def natten1dav(
+        attn: torch.Tensor,
+        value: torch.Tensor,
+        kernel_size: int,
+        dilation: int,
+    ) -> torch.Tensor:
+        """Pure-PyTorch 1-D neighborhood AV (weighted sum).
+
+        Args:
+            attn: ``(B, heads, L, ks)``
+            value: ``(B, heads, L, D)``
+        Returns:
+            ``(B, heads, L, D)``
+        """
+        _B, _heads, L, _D = value.shape
+        neighbors, _ = _na1d_neighbor_info(L, kernel_size, dilation, value.device)
+
+        # Gather neighbor values: (B, heads, L, ks, D)
+        V_nb = value[:, :, neighbors]
+        # Weighted sum over ks → (B, heads, L, D)
+        return torch.einsum("bhlk,bhlkd->bhld", attn, V_nb)
+
+    # ----------------------------------------------- 2-D functions
+    def natten2dqkrpb(
+        query: torch.Tensor,
+        key: torch.Tensor,
+        rpb: torch.Tensor,
+        kernel_size: int,
+        dilation: int,
+    ) -> torch.Tensor:
+        """Pure-PyTorch 2-D neighborhood QK + RPB.
+
+        Args:
+            query, key: ``(B, heads, H, W, D)``
+            rpb: ``(heads, 2*ks-1, 2*ks-1)``
+        Returns:
+            ``(B, heads, H, W, ks*ks)``
+        """
+        _B, _heads, H, W, _D = query.shape
+        ks = kernel_size
+        row_nb, col_nb, row_rpb, col_rpb = _na2d_neighbor_info(
+            H, W, ks, dilation, query.device,
+        )
+
+        # 2-D neighbor grid indices: (H, ks_h, W, ks_w)
+        # row_nb: (H, ks), col_nb: (W, ks)
+        # Gather keys: K[:, :, row_nb[h, kh], col_nb[w, kw], :] → (B, heads, H, ks, W, ks, D)
+        K_rows = key[:, :, row_nb]          # (B, heads, H, ks, W, D)
+        K_nb = K_rows[:, :, :, :, col_nb]   # (B, heads, H, ks, W, ks, D)
+        # Rearrange to (B, heads, H, W, ks*ks, D)
+        K_nb = K_nb.permute(0, 1, 2, 4, 3, 5, 6).contiguous()
+        K_nb = K_nb.reshape(_B, _heads, H, W, ks * ks, _D)
+
+        # Dot product
+        scores = torch.einsum("bhwsd,bhwskd->bhwsk", query, K_nb)
+        # → (B, heads, H, W, ks*ks)
+
+        # RPB: combine row and col RPB indices
+        # row_rpb: (H, ks), col_rpb: (W, ks)
+        # Full 2D RPB index: rpb[:, row_rpb[h, kh], col_rpb[w, kw]]
+        # → shape (heads, H, ks, W, ks) → rearrange to (heads, H, W, ks*ks)
+        rpb_2d = rpb[:, row_rpb]                    # (heads, H, ks, 2*ks-1)
+        rpb_2d = rpb_2d[:, :, :, col_rpb]           # (heads, H, ks, W, ks)
+        rpb_2d = rpb_2d.permute(0, 1, 3, 2, 4).contiguous()  # (heads, H, W, ks, ks)
+        rpb_2d = rpb_2d.reshape(_heads, H, W, ks * ks)
+
+        scores = scores + rpb_2d.unsqueeze(0)
+        return scores
+
+    def natten2dav(
+        attn: torch.Tensor,
+        value: torch.Tensor,
+        kernel_size: int,
+        dilation: int,
+    ) -> torch.Tensor:
+        """Pure-PyTorch 2-D neighborhood AV (weighted sum).
+
+        Args:
+            attn: ``(B, heads, H, W, ks*ks)``
+            value: ``(B, heads, H, W, D)``
+        Returns:
+            ``(B, heads, H, W, D)``
+        """
+        _B, _heads, H, W, _D = value.shape
+        ks = kernel_size
+        row_nb, col_nb, _, _ = _na2d_neighbor_info(
+            H, W, ks, dilation, value.device,
+        )
+
+        # Gather neighbor values
+        V_rows = value[:, :, row_nb]          # (B, heads, H, ks, W, D)
+        V_nb = V_rows[:, :, :, :, col_nb]    # (B, heads, H, ks, W, ks, D)
+        V_nb = V_nb.permute(0, 1, 2, 4, 3, 5, 6).contiguous()
+        V_nb = V_nb.reshape(_B, _heads, H, W, ks * ks, _D)
+
+        return torch.einsum("bhwsk,bhwskd->bhwsd", attn, V_nb)
+
+    # -------------------------------- register fake natten modules
+    natten_mod = types.ModuleType("natten")
+    natten_mod.__package__ = "natten"
+    natten_mod.__path__ = []  # type: ignore[attr-defined]
+
+    func_mod = types.ModuleType("natten.functional")
+    func_mod.__package__ = "natten"
+    func_mod.natten1dqkrpb = natten1dqkrpb  # type: ignore[attr-defined]
+    func_mod.natten1dav = natten1dav  # type: ignore[attr-defined]
+    func_mod.natten2dqkrpb = natten2dqkrpb  # type: ignore[attr-defined]
+    func_mod.natten2dav = natten2dav  # type: ignore[attr-defined]
+
+    natten_mod.functional = func_mod  # type: ignore[attr-defined]
+    sys.modules["natten"] = natten_mod
+    sys.modules["natten.functional"] = func_mod
 
 
 def _ensure_natten_torch_compat() -> None:
@@ -140,6 +346,7 @@ def _ensure_natten_torch_compat() -> None:
         try:
             import natten.functional as nf  # type: ignore
         except Exception:
+            _install_pure_pytorch_natten_fallback()
             return
 
         if hasattr(nf, "na1d_qk") and not hasattr(nf, "natten1dqkrpb"):

@@ -16,6 +16,7 @@ import os
 import runpy
 import signal
 import sys
+import threading
 import traceback
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -146,6 +147,23 @@ def _on_progress(current: int, total: int, stage: str) -> None:
 
 core.set_progress_callback(_on_progress)
 
+# ── Model preload state ──────────────────────────────────────────────
+
+_preload_status: str = "idle"  # "idle" | "loading" | "ready" | "error"
+_preload_error: str | None = None
+
+
+def _preload_ast_model() -> None:
+    """Background worker: pre-load the AST model at startup."""
+    global _preload_status, _preload_error
+    _preload_status = "loading"
+    try:
+        core.preload_model()
+        _preload_status = "ready"
+    except Exception as e:
+        _preload_status = "error"
+        _preload_error = str(e)
+
 
 # ── App lifecycle ────────────────────────────────────────────────────
 
@@ -155,6 +173,10 @@ async def lifespan(app: FastAPI):
     global _progress_queue, _event_loop
     _event_loop = asyncio.get_running_loop()
     _progress_queue = asyncio.Queue()
+
+    # Start background model preloading
+    threading.Thread(target=_preload_ast_model, daemon=True).start()
+
     yield
     _progress_queue = None
     _event_loop = None
@@ -284,6 +306,12 @@ async def progress_stream(request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/preload-status")
+async def preload_status():
+    """Return the current AST model preload status."""
+    return JSONResponse(content={"status": _preload_status, "error": _preload_error})
 
 
 @app.post("/shutdown")

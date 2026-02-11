@@ -21,6 +21,7 @@ import {
   analyzeFile,
   getAudioUrl,
   onProgress,
+  getPreloadStatus,
   type LoopPoint,
   type AnalyzeResponse,
   type ProgressResponse,
@@ -42,6 +43,7 @@ type SortMode = "score_desc" | "length_desc" | "length_asc";
 const stageMessages: Record<string, string> = {
   idle: "대기 중",
   starting: "분석 시작...",
+  loading_audio: "오디오 파일 로딩 중...",
   loading_model: "모델 로딩 중...",
   preparing_chunks: "오디오 분할 중...",
   extracting_embeddings: "임베딩 추출 중...",
@@ -60,20 +62,21 @@ const stageMessages: Record<string, string> = {
 
 const stageProgressRanges: Record<string, { start: number; end: number }> = {
   idle: { start: 0, end: 0 },
-  starting: { start: 0, end: 3 },
-  loading_model: { start: 3, end: 15 },
-  preparing_chunks: { start: 15, end: 30 },
-  extracting_embeddings: { start: 30, end: 70 },
-  computing_recurrence: { start: 70, end: 76 },
-  enhancing_paths: { start: 76, end: 82 },
-  finding_patterns: { start: 82, end: 88 },
-  detecting_beats: { start: 88, end: 92 },
-  checking_structure_model: { start: 92, end: 93 },
-  downloading_structure_model: { start: 93, end: 95 },
-  loading_structure_model: { start: 95, end: 96 },
-  analyzing_structure: { start: 96, end: 98 },
-  structure_complete: { start: 98, end: 98 },
-  refining_seam: { start: 98, end: 99 },
+  starting: { start: 0, end: 2 },
+  loading_audio: { start: 2, end: 5 },
+  loading_model: { start: 5, end: 12 },
+  preparing_chunks: { start: 12, end: 20 },
+  extracting_embeddings: { start: 20, end: 55 },
+  computing_recurrence: { start: 55, end: 65 },
+  enhancing_paths: { start: 65, end: 72 },
+  finding_patterns: { start: 72, end: 80 },
+  detecting_beats: { start: 80, end: 88 },
+  checking_structure_model: { start: 88, end: 89 },
+  downloading_structure_model: { start: 89, end: 92 },
+  loading_structure_model: { start: 92, end: 93 },
+  analyzing_structure: { start: 93, end: 96 },
+  structure_complete: { start: 96, end: 96 },
+  refining_seam: { start: 96, end: 99 },
   completed: { start: 100, end: 100 },
   error: { start: 0, end: 0 },
 };
@@ -143,12 +146,15 @@ export default function Home() {
   const [duration, setDuration] = useState(0);
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("score_desc");
-  const [progress, setProgress] = useState<ProgressResponse>({
+  const [, setProgress] = useState<ProgressResponse>({
     current: 0,
     total: 0,
     stage: "idle",
   });
   const [overallProgressPercent, setOverallProgressPercent] = useState(0);
+  const [preloadStatus, setPreloadStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const analyzeFileRef = useRef<((path: string, name: string) => void) | null>(
     null
@@ -159,6 +165,28 @@ export default function Home() {
   useEffect(() => {
     setIsReady(true);
   }, []);
+
+  // Poll model preload status
+  useEffect(() => {
+    if (preloadStatus !== "idle" && preloadStatus !== "loading") return;
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await getPreloadStatus();
+        if (!cancelled) setPreloadStatus(res.status);
+      } catch {
+        // Server not ready yet, keep polling
+      }
+    };
+
+    poll();
+    const id = setInterval(poll, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [preloadStatus]);
 
   // Setup Tauri drag-drop handler
   useEffect(() => {
@@ -627,6 +655,11 @@ export default function Home() {
           <p className="text-muted-foreground">
             오디오 파일의 완벽한 루프 포인트를 자동으로 찾아줍니다
           </p>
+          {preloadStatus === "loading" && (
+            <p className="mt-1 text-xs text-muted-foreground animate-pulse">
+              모델 준비 중...
+            </p>
+          )}
         </header>
 
         <main className="space-y-6">
@@ -661,11 +694,6 @@ export default function Home() {
                     />
                     <p className="text-xs font-medium text-center">
                       {overallProgressPercent}%
-                    </p>
-                    <p className="text-xs text-muted-foreground text-center">
-                      {progress.total > 0
-                        ? `단계 진행: ${progress.current} / ${progress.total}`
-                        : "단계 진행: 준비 중"}
                     </p>
                   </div>
                 )}

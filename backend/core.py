@@ -79,6 +79,11 @@ class MusicLooperCore:
         self._progress_callback_fn = callback
 
     @staticmethod
+    def preload_model() -> None:
+        """Pre-load the AST model in the background (thread-safe)."""
+        DeepLoopAnalyzer._load_model()
+
+    @staticmethod
     def _is_madmom_available() -> bool:
         """Check if madmom is available for beat alignment."""
         try:
@@ -451,10 +456,9 @@ class MusicLooperCore:
     def _analyze_with_progress(self, file_path: str, use_beat_alignment: bool = False, use_allin1: bool = False):
         """Run analysis with progress tracking in background thread."""
         try:
-            self._analysis_progress = {"current": 0, "total": 0, "stage": "loading_model"}
             self._analysis_result = None
-            if self._progress_callback_fn:
-                self._progress_callback_fn(0, 0, "loading_model")
+
+            self._progress_callback(0, 1, "loading_audio")
 
             self._audio, self._sr = librosa.load(file_path, sr=None, mono=False)
             if len(self._audio.shape) == 1:
@@ -464,6 +468,8 @@ class MusicLooperCore:
             self._mono_audio = self._audio[:, 0] if self._audio is not None else None
             self._mono_ds_audio = None
             self._mono_ds_sr = None
+
+            self._progress_callback(1, 1, "loading_audio")
 
             self._analysis_result = self._analyze_ast_with_progress(file_path, use_beat_alignment, use_allin1)
 

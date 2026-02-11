@@ -16,6 +16,8 @@ AST Model:
     License: BSD-3-Clause
 """
 
+import threading
+
 import numpy as np
 import librosa
 from dataclasses import dataclass
@@ -58,6 +60,7 @@ class DeepLoopAnalyzer:
     _processor = None
     _device = None
     _use_half = False
+    _model_lock = threading.Lock()
 
     def __init__(
         self,
@@ -92,38 +95,46 @@ class DeepLoopAnalyzer:
         """Load AST model (cached at class level).
 
         Uses float16 precision on CUDA/MPS for better performance.
+        Thread-safe via double-checked locking pattern.
         """
+        # Fast path: model already loaded (no lock needed)
         if cls._model is not None:
             return cls._model, cls._processor, cls._device, cls._use_half
 
-        import torch
-        from transformers import AutoFeatureExtractor, ASTModel
+        # Slow path: acquire lock and load
+        with cls._model_lock:
+            # Re-check after acquiring lock (another thread may have loaded it)
+            if cls._model is not None:
+                return cls._model, cls._processor, cls._device, cls._use_half
 
-        # Determine device and precision
-        if torch.cuda.is_available():
-            cls._device = torch.device("cuda")
-            cls._use_half = True
-        elif torch.backends.mps.is_available():
-            cls._device = torch.device("mps")
-            cls._use_half = True
-        else:
-            cls._device = torch.device("cpu")
-            cls._use_half = False
+            import torch
+            from transformers import AutoFeatureExtractor, ASTModel
 
-        # Load model and processor
-        model_name = "MIT/ast-finetuned-audioset-10-10-0.4593"
+            # Determine device and precision
+            if torch.cuda.is_available():
+                cls._device = torch.device("cuda")
+                cls._use_half = True
+            elif torch.backends.mps.is_available():
+                cls._device = torch.device("mps")
+                cls._use_half = True
+            else:
+                cls._device = torch.device("cpu")
+                cls._use_half = False
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            cls._processor = AutoFeatureExtractor.from_pretrained(model_name)
-            cls._model = ASTModel.from_pretrained(model_name)
+            # Load model and processor
+            model_name = "MIT/ast-finetuned-audioset-10-10-0.4593"
 
-            # Use half precision on GPU/MPS for better performance
-            if cls._use_half:
-                cls._model = cls._model.half()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                cls._processor = AutoFeatureExtractor.from_pretrained(model_name)
+                cls._model = ASTModel.from_pretrained(model_name)
 
-            cls._model.to(cls._device)
-            cls._model.eval()
+                # Use half precision on GPU/MPS for better performance
+                if cls._use_half:
+                    cls._model = cls._model.half()
+
+                cls._model.to(cls._device)
+                cls._model.eval()
 
         return cls._model, cls._processor, cls._device, cls._use_half
 
@@ -359,6 +370,9 @@ class DeepLoopAnalyzer:
         )
 
         if progress_callback:
+            progress_callback(1, 1, "computing_recurrence")
+
+        if progress_callback:
             progress_callback(0, 1, "enhancing_paths")
 
         # Apply path enhancement to make diagonal structures clearer
@@ -373,6 +387,9 @@ class DeepLoopAnalyzer:
         # Normalize to 0-1 range
         if rec_enhanced.max() > rec_enhanced.min():
             rec_enhanced = (rec_enhanced - rec_enhanced.min()) / (rec_enhanced.max() - rec_enhanced.min())
+
+        if progress_callback:
+            progress_callback(1, 1, "enhancing_paths")
 
         min_chunks = int(min_duration / self.chunk_duration)
         candidates = []
@@ -934,31 +951,10 @@ class BeatAlignedLoopAnalyzer(DeepLoopAnalyzer):
                 progress_callback=progress_callback,
             )
 
-        # Detect beats first
-        if progress_callback:
-            progress_callback(0, 1, "detecting_beats")
-
-        try:
-            self._beat_analyzer.detect_downbeats(progress_callback)
-        except Exception as e:
-            warnings.warn(f"Beat detection failed: {e}, falling back to normal analysis")
-            return super().find_loop_points(
-                min_duration=min_duration,
-                min_loop_fraction=min_loop_fraction,
-                n_candidates=n_candidates,
-                similarity_threshold=similarity_threshold,
-                use_librosa_recurrence=use_librosa_recurrence,
-                recurrence_k=recurrence_k,
-                recurrence_width=recurrence_width,
-                path_enhance_filters=path_enhance_filters,
-                path_enhance_width=path_enhance_width,
-                progress_callback=progress_callback,
-            )
-
         # Apply minimum fraction constraint
         min_duration = max(min_duration, self.duration * min_loop_fraction)
 
-        # Choose pattern detection method
+        # Choose pattern detection method (embeddings → recurrence → patterns)
         if use_librosa_recurrence:
             patterns = self.find_diagonal_patterns_librosa(
                 min_duration=min_duration,
@@ -999,6 +995,18 @@ class BeatAlignedLoopAnalyzer(DeepLoopAnalyzer):
         if progress_callback:
             progress_callback(0, 1, "finding_patterns")
 
+        # Detect beats after pattern detection, before refinement
+        # Beat info is only needed for refine_loop_points_beat_aligned()
+        beat_detection_ok = False
+        if progress_callback:
+            progress_callback(0, 1, "detecting_beats")
+
+        try:
+            self._beat_analyzer.detect_downbeats(progress_callback)
+            beat_detection_ok = True
+        except Exception as e:
+            warnings.warn(f"Beat detection failed: {e}, will skip beat snapping in refinement")
+
         candidates = []
         seen_ranges = []
 
@@ -1010,10 +1018,15 @@ class BeatAlignedLoopAnalyzer(DeepLoopAnalyzer):
             start_sample = self.chunk_to_samples(start_chunk)
             end_sample = self.chunk_to_samples(end_chunk)
 
-            # Use beat-aligned refinement
-            refined_start, refined_end, corr_score = self.refine_loop_points_beat_aligned(
-                start_sample, end_sample, original_sr, progress_callback=progress_callback
-            )
+            # Use beat-aligned refinement if beat detection succeeded, else fallback
+            if beat_detection_ok:
+                refined_start, refined_end, corr_score = self.refine_loop_points_beat_aligned(
+                    start_sample, end_sample, original_sr, progress_callback=progress_callback
+                )
+            else:
+                refined_start, refined_end, corr_score = self.refine_loop_points(
+                    start_sample, end_sample
+                )
 
             # Skip duplicates
             is_duplicate = False

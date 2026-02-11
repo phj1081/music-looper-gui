@@ -12,6 +12,11 @@ export interface ProgressResponse {
   error?: string;
 }
 
+export interface PreloadStatusResponse {
+  status: "idle" | "loading" | "ready" | "error";
+  error: string | null;
+}
+
 export interface EnhancementStatus {
   enabled: boolean;
   effective: boolean;
@@ -161,6 +166,14 @@ export async function getAudioUrl(): Promise<string | null> {
   const baseUrl = await getBaseUrl();
   // Add a cache buster so file switches always load fresh audio.
   return `${baseUrl}/audio?v=${Date.now().toString()}`;
+}
+
+// ── Model Preload Status ────────────────────────────────────────────
+
+export async function getPreloadStatus(): Promise<PreloadStatusResponse> {
+  const baseUrl = await getBaseUrl();
+  const response = await fetch(`${baseUrl}/preload-status`);
+  return (await response.json()) as PreloadStatusResponse;
 }
 
 // ── Waveform ───────────────────────────────────────────────────────
