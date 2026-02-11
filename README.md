@@ -128,7 +128,7 @@ pnpm install
 
 # 개발 모드 실행
 cd ..
-pnpm dev:tauri
+pnpm dev
 ```
 
 ### 프로덕션 빌드
