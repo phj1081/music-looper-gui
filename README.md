@@ -116,6 +116,7 @@ music-looper-gui/
 
 ### 요구사항
 
+- [Tauri 시스템 의존성](https://v2.tauri.app/start/prerequisites/) (OS별 안내 참고)
 - [Node.js](https://nodejs.org/) 18+
 - [pnpm](https://pnpm.io/)
 - [Rust](https://rustup.rs/)
